@@ -1,0 +1,55 @@
+{ nixpkgs, rust-overlay, system }:
+
+let
+  pkgs = import nixpkgs {
+    inherit system;
+    overlays = [
+      (import rust-overlay)
+    ];
+    config = {
+      allowUnfree = true;
+    };
+  };
+  rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+    extensions = [ "rust-src" "rust-analysis" "clippy" "rustfmt" "rust-analyzer" ];
+    targets = [
+      "x86_64-unknown-linux-gnu"
+    ];
+  };
+
+  libraries = with pkgs; [
+    # x11rb crate: active-window focus check (works for XWayland apps like Warframe)
+    xorg.libX11
+    xorg.libxcb
+    # curl: used by build.rs to download ocrs models on first build
+    curl
+  ];
+
+  shellHook = ''
+    # Disables the DMA-BUF renderer in webkit
+    # It causes crashes/weird behaviour otherwise
+    export WEBKIT_DISABLE_DMABUF_RENDERER=1
+    export XDG_DATA_DIRS="$GSETTINGS_SCHEMAS_PATH"
+  '';
+in
+{
+  inherit pkgs rustToolchain libraries shellHook;
+
+  shell = pkgs.mkShell {
+	nativeBuildInputs = with pkgs; [
+	  pkg-config
+	  wrapGAppsHook4
+	  cargo
+	  bun
+	];
+
+	buildInputs = with pkgs; [
+	  rustToolchain
+	  librsvg
+	  webkitgtk_4_1
+	] ++ libraries;
+
+	inherit shellHook;
+  };
+}
+
