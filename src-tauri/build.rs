@@ -3,11 +3,11 @@ use std::{fs, io::Read, path::Path};
 const MODELS: &[(&str, &str)] = &[
     (
         "text-detection.rten",
-        "https://ocrs-models.s3.ap-southeast-2.amazonaws.com/text-detection.rten",
+        "https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.rten",
     ),
     (
         "text-recognition.rten",
-        "https://ocrs-models.s3.ap-southeast-2.amazonaws.com/text-recognition.rten",
+        "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.rten",
     ),
 ];
 
@@ -19,7 +19,9 @@ fn main() {
 
     for (name, url) in MODELS {
         let path = models_dir.join(name);
-        if !path.exists() {
+        // Re-download if missing or suspiciously small (failed/partial download).
+        let too_small = fs::metadata(&path).map(|m| m.len() < 1024 * 100).unwrap_or(true);
+        if too_small {
             println!("cargo:warning=Downloading OCR model: {name}");
             download(url, &path);
         }

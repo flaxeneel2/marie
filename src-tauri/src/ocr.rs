@@ -23,8 +23,10 @@ static ENGINE: Lazy<Result<OcrEngine, String>> = Lazy::new(|| {
 pub async fn recognise_regions(regions: Vec<(Vec<u8>, u32, u32)>) -> Vec<String> {
     let mut out = Vec::with_capacity(regions.len());
     for (pixels, w, h) in regions {
+        eprintln!("[ocr] region {w}×{h}, {} bytes", pixels.len());
         out.push(recognise_one(pixels, w, h).await);
     }
+    eprintln!("[ocr] final: {out:?}");
     out
 }
 
@@ -36,22 +38,56 @@ async fn recognise_one(pixels: Vec<u8>, width: u32, height: u32) -> String {
 }
 
 fn ocr_pixels(pixels: &[u8], width: u32, height: u32) -> Option<String> {
-    let engine = ENGINE.as_ref().ok()?;
+    let engine = match ENGINE.as_ref() {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("[ocr] engine init failed: {e}");
+            return None;
+        }
+    };
 
-    // Drop alpha channel — ocrs expects interleaved RGB (HWC), 3 bytes per pixel.
-    let rgb: Vec<u8> = pixels.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
-    let source = ImageSource::from_bytes(&rgb, (width, height)).ok()?;
+    // Drop alpha, invert luminance — Warframe UI is white-on-dark;
+    // ocrs was trained on dark-on-light (document) images.
+    let rgb: Vec<u8> = pixels
+        .chunks(4)
+        .flat_map(|p| [255 - p[0], 255 - p[1], 255 - p[2]])
+        .collect();
 
-    let input = engine.prepare_input(source).ok()?;
-    let words = engine.detect_words(&input).ok()?;
+    let source = match ImageSource::from_bytes(&rgb, (width, height)) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[ocr] ImageSource::from_bytes failed ({width}×{height}, {} bytes): {e}", rgb.len());
+            return None;
+        }
+    };
+
+    let input = match engine.prepare_input(source) {
+        Ok(i) => i,
+        Err(e) => { eprintln!("[ocr] prepare_input failed: {e}"); return None; }
+    };
+
+    let words = match engine.detect_words(&input) {
+        Ok(w) => w,
+        Err(e) => { eprintln!("[ocr] detect_words failed: {e}"); return None; }
+    };
+    eprintln!("[ocr] detected {} words in {width}×{height} region", words.len());
+
     let lines = engine.find_text_lines(&input, &words);
-    let texts = engine.recognize_text(&input, &lines).ok()?;
+    eprintln!("[ocr] found {} lines", lines.len());
+
+    let texts = match engine.recognize_text(&input, &lines) {
+        Ok(t) => t,
+        Err(e) => { eprintln!("[ocr] recognize_text failed: {e}"); return None; }
+    };
 
     // Return only the first recognised line — the item name.
-    texts
+    let result = texts
         .into_iter()
         .flatten()
         .next()
         .map(|line| line.to_string())
-        .filter(|s| !s.trim().is_empty())
+        .filter(|s| !s.trim().is_empty());
+
+    eprintln!("[ocr] result: {result:?}");
+    result
 }
