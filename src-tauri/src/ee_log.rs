@@ -37,8 +37,56 @@ pub fn log_path() -> PathBuf {
 
 // Triggers when Warframe displays the relic reward selection UI.
 // "Relic rewards initialized" fires before "Got rewards" and coincides with the
-// moment the 4-choice screen becomes visible.
+// moment the reward screen becomes visible.
 const TRIGGER: &str = "Relic rewards initialized";
+
+// Marks the start of a new fissure reward sequence; resets the card counter.
+const MISSION_START: &str = "ProjectionsCountdown.swf";
+
+// Network lag between the log line and the reward cards appearing on screen.
+const TRIGGER_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+
+// Rolling window of recent log lines scanned when the trigger fires.
+const RECENT_LINE_BUFFER: usize = 200;
+
+/// Best-effort squad size detection from recent log lines.
+///
+/// Scans the rolling buffer for known player-count patterns.  Returns `None`
+/// if nothing matches; the caller falls back to 4.
+///
+/// If the patterns here don't fire against your EE.log, run with
+/// `RUST_LOG=debug` and add the relevant substring to this function.
+fn detect_squad_size(recent: &std::collections::VecDeque<String>) -> Option<u32> {
+    for line in recent.iter().rev() {
+        // "Net [Info]: relic reward choices: 3"  (observed in fissure sessions)
+        if let Some(rest) = line
+            .to_lowercase()
+            .find("relic reward choices:")
+            .map(|i| &line[i + "relic reward choices:".len()..])
+        {
+            if let Ok(n) = rest.trim().split_whitespace().next().unwrap_or("").parse::<u32>() {
+                if (1..=4).contains(&n) {
+                    return Some(n);
+                }
+            }
+        }
+
+        // "Script [Info]: PlayerCount = 2"  (seen in some build variants)
+        if let Some(rest) = line
+            .to_lowercase()
+            .find("playercount")
+            .map(|i| &line[i + "playercount".len()..])
+        {
+            let rest = rest.trim_start_matches(|c: char| !c.is_ascii_digit());
+            if let Ok(n) = rest.split_whitespace().next().unwrap_or("").parse::<u32>() {
+                if (1..=4).contains(&n) {
+                    return Some(n);
+                }
+            }
+        }
+    }
+    None
+}
 
 pub fn start_watcher(app: AppHandle) {
     std::thread::spawn(move || {
@@ -68,6 +116,9 @@ pub fn start_watcher(app: AppHandle) {
 
         eprintln!("[marie] watching {path:?}");
 
+        let mut recent: std::collections::VecDeque<String> =
+            std::collections::VecDeque::with_capacity(RECENT_LINE_BUFFER);
+
         for event in rx.iter() {
             if event.is_err() {
                 continue;
@@ -78,9 +129,23 @@ pub fn start_watcher(app: AppHandle) {
                 match reader.read_line(&mut line) {
                     Ok(0) => break,
                     Ok(_) => {
+                        if line.contains(MISSION_START) {
+                            recent.clear();
+                        }
+
+                        if recent.len() == RECENT_LINE_BUFFER {
+                            recent.pop_front();
+                        }
+                        recent.push_back(line.clone());
+
                         if line.contains(TRIGGER) {
-                            eprintln!("[marie] relic reward screen detected");
-                            app.emit("relic-trigger", ()).ok();
+                            let player_count = detect_squad_size(&recent).unwrap_or(4);
+                            eprintln!(
+                                "[marie] relic reward screen detected ({player_count} player(s)), \
+                                 waiting {TRIGGER_DELAY:?}"
+                            );
+                            std::thread::sleep(TRIGGER_DELAY);
+                            app.emit("relic-trigger", player_count).ok();
                         }
                     }
                     Err(_) => break,

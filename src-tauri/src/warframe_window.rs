@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-#[derive(Serialize, Clone, Copy)]
+#[derive(Serialize, Clone, Copy, Debug)]
 pub struct WindowGeometry {
     pub x: i32,
     pub y: i32,

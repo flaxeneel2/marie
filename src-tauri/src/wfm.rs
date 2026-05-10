@@ -113,16 +113,50 @@ pub async fn prices_for_names(names: Vec<String>) -> Vec<ItemPriceResult> {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Items that appear in relic rewards but have no meaningful market value.
+/// They are returned as unmatched so the overlay shows "—" for both plat and ducats.
+const NON_MARKET: &[&str] = &[
+    "forma blueprint",
+    "2x forma blueprint",
+    "exilus adapter blueprint",
+];
+
+/// Combined similarity: 60% Jaro-Winkler (character level) + 40% Jaccard on
+/// word tokens (semantic level).  Using both means a candidate needs to look
+/// right *and* share the right words, reducing false positives from OCR noise.
+fn similarity(query: &str, target: &str) -> f64 {
+    let jw = strsim::jaro_winkler(query, target);
+
+    let q: std::collections::HashSet<&str> = query.split_whitespace().collect();
+    let t: std::collections::HashSet<&str> = target.split_whitespace().collect();
+    let intersection = q.intersection(&t).count();
+    let union = q.union(&t).count();
+    let jaccard = if union == 0 { 0.0 } else { intersection as f64 / union as f64 };
+
+    0.6 * jw + 0.4 * jaccard
+}
+
 /// Fuzzy-match `raw` against all cached item names, returning the best hit above
 /// a similarity threshold. Falls back to an empty match on failure.
 fn best_match(raw: &str, cache: &HashMap<String, CachedItem>) -> (String, Option<CachedItem>) {
     let query = raw.to_lowercase();
+
+    if NON_MARKET.iter().any(|&nm| query.contains(nm)) {
+        return (String::new(), None);
+    }
+
+    let q_words = query.split_whitespace().count();
     let mut best_score = 0.0_f64;
     let mut best_name = String::new();
     let mut best_item: Option<CachedItem> = None;
 
     for (name, item) in cache.iter() {
-        let score = strsim::jaro_winkler(&query, name);
+        // Hard gate: word count must be within ±1 — prevents short OCR fragments
+        // from matching multi-word item names and vice-versa.
+        let t_words = name.split_whitespace().count();
+        if q_words.abs_diff(t_words) > 1 { continue; }
+
+        let score = similarity(&query, name);
         if score > best_score {
             best_score = score;
             best_name = name.clone();
@@ -130,8 +164,9 @@ fn best_match(raw: &str, cache: &HashMap<String, CachedItem>) -> (String, Option
         }
     }
 
-    // Require at least 70% similarity to consider a match valid.
-    if best_score >= 0.70 {
+    eprintln!("[wfm] best match for {query:?}: {best_name:?} (score {best_score:.3})");
+
+    if best_score >= 0.75 {
         (best_name, best_item)
     } else {
         (String::new(), None)

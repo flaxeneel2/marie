@@ -2,7 +2,6 @@ use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
 use once_cell::sync::Lazy;
 use rten::Model;
 
-// Models are downloaded at build time by build.rs and embedded into the binary.
 static DETECTION_MODEL: &[u8] =
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/models/text-detection.rten"));
 static RECOGNITION_MODEL: &[u8] =
@@ -19,75 +18,57 @@ static ENGINE: Lazy<Result<OcrEngine, String>> = Lazy::new(|| {
     .map_err(|e| e.to_string())
 });
 
-/// Runs OCR on a list of RGBA image regions and returns recognised text for each.
-pub async fn recognise_regions(regions: Vec<(Vec<u8>, u32, u32)>) -> Vec<String> {
-    let mut out = Vec::with_capacity(regions.len());
-    for (pixels, w, h) in regions {
-        eprintln!("[ocr] region {w}×{h}, {} bytes", pixels.len());
-        out.push(recognise_one(pixels, w, h).await);
+/// Run OCR on all card strips in parallel and return one name per card.
+pub async fn recognise_cards(regions: Vec<(Vec<u8>, u32, u32)>) -> Vec<String> {
+    // Spawn all blocking tasks before awaiting any — they run concurrently on
+    // the Tokio blocking thread pool.
+    let handles: Vec<_> = regions
+        .into_iter()
+        .enumerate()
+        .map(|(i, (pixels, w, h))| {
+            tokio::task::spawn_blocking(move || {
+                let result = ocr_card(&pixels, w, h);
+                eprintln!("[ocr] card {i} ({w}×{h}): {result:?}");
+                result
+            })
+        })
+        .collect();
+
+    let mut out = Vec::with_capacity(handles.len());
+    for h in handles {
+        out.push(h.await.unwrap_or_default().unwrap_or_default());
     }
-    eprintln!("[ocr] final: {out:?}");
     out
 }
 
-async fn recognise_one(pixels: Vec<u8>, width: u32, height: u32) -> String {
-    tokio::task::spawn_blocking(move || ocr_pixels(&pixels, width, height))
-        .await
-        .unwrap_or_default()
-        .unwrap_or_default()
-}
-
-fn ocr_pixels(pixels: &[u8], width: u32, height: u32) -> Option<String> {
+/// OCR a single card strip and return the item name (all text lines joined,
+/// to handle word-wrapped names like "Vauban Prime Chassis / Blueprint").
+fn ocr_card(pixels: &[u8], width: u32, height: u32) -> Option<String> {
     let engine = match ENGINE.as_ref() {
         Ok(e) => e,
-        Err(e) => {
-            eprintln!("[ocr] engine init failed: {e}");
-            return None;
-        }
+        Err(e) => { eprintln!("[ocr] engine init failed: {e}"); return None; }
     };
 
-    // Drop alpha, invert luminance — Warframe UI is white-on-dark;
-    // ocrs was trained on dark-on-light (document) images.
+    // Invert luminance: Warframe UI is white-on-dark; ocrs trained on dark-on-light.
     let rgb: Vec<u8> = pixels
         .chunks(4)
         .flat_map(|p| [255 - p[0], 255 - p[1], 255 - p[2]])
         .collect();
 
-    let source = match ImageSource::from_bytes(&rgb, (width, height)) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("[ocr] ImageSource::from_bytes failed ({width}×{height}, {} bytes): {e}", rgb.len());
-            return None;
-        }
-    };
-
-    let input = match engine.prepare_input(source) {
-        Ok(i) => i,
-        Err(e) => { eprintln!("[ocr] prepare_input failed: {e}"); return None; }
-    };
-
-    let words = match engine.detect_words(&input) {
-        Ok(w) => w,
-        Err(e) => { eprintln!("[ocr] detect_words failed: {e}"); return None; }
-    };
-    eprintln!("[ocr] detected {} words in {width}×{height} region", words.len());
-
+    let source = ImageSource::from_bytes(&rgb, (width, height)).ok()?;
+    let input = engine.prepare_input(source).ok()?;
+    let words = engine.detect_words(&input).ok()?;
     let lines = engine.find_text_lines(&input, &words);
-    eprintln!("[ocr] found {} lines", lines.len());
+    let texts = engine.recognize_text(&input, &lines).ok()?;
 
-    let texts = match engine.recognize_text(&input, &lines) {
-        Ok(t) => t,
-        Err(e) => { eprintln!("[ocr] recognize_text failed: {e}"); return None; }
-    };
-
-    // Return only the first recognised line — the item name.
-    let result = texts
+    // Join all recognised lines — handles two-row word-wrapped names.
+    let joined: String = texts
         .into_iter()
         .flatten()
-        .next()
         .map(|line| line.to_string())
-        .filter(|s| !s.trim().is_empty());
+        .filter(|s| !s.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
 
-    eprintln!("[ocr] result: {result:?}");
-    result
+    if joined.trim().is_empty() { None } else { Some(joined) }
 }
