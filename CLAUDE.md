@@ -24,3 +24,4 @@ No test infrastructure exists yet.
 - [OCR & screenshots](docs/ocr.md) — capture pipeline, focus check, ocrs model loading
 - [Relics feature](docs/relics.md) — EE.log trigger, WFM API, overlay behaviour, known limitations
 - [Conventions](docs/conventions.md) — Svelte 5 runes, Tauri config, ports, platform split patterns
+- [Linux / Wayland](docs/linux-wayland.md) — Hyprland window rules, Wayland overlay constraints and workarounds

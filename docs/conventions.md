@@ -12,6 +12,13 @@
 - New Tauri capabilities (permissions) go in `src-tauri/capabilities/`
 - Both windows (`main` and `overlay`) must be listed in `capabilities/default.json`
 
+## Wayland / overlay window
+
+- The overlay window must be `"visible": true` in `tauri.conf.json`. `show()`/`hide()` are no-ops on Wayland XDG shell. Use Svelte `{#if visible}` to toggle content instead.
+- Never `await win.setIgnoreCursorEvents(true)` — on Wayland this call never returns a reply, hanging the caller indefinitely.
+- Never park the overlay off-screen (e.g. at `(-100000, -100000)`) — WebKitGTK suspends rendering for windows outside the visible area.
+- See [docs/linux-wayland.md](linux-wayland.md) for required Hyprland window rules.
+
 ## Rust
 
 - `screenshots` and `windows` crates are `[target.'cfg(windows)'.dependencies]`

@@ -2,11 +2,11 @@
 
 ## Overview
 
-The relic overlay detects when the Warframe void fissure reward selection screen appears, identifies the four presented items, and shows their current platinum and ducat values in a transparent always-on-top window.
+The relic overlay detects when the Warframe void fissure reward selection screen appears, identifies the presented items (1–4 depending on squad size), and shows their current platinum and ducat values in a transparent always-on-top window.
 
 ## Trigger Detection (EE.log)
 
-Warframe writes to `EE.log` continuously. The string that fires when the 4-choice reward UI becomes visible is:
+Warframe writes to `EE.log` continuously. The string that fires when the reward UI becomes visible is:
 
 ```
 Script [Info]: Relic rewards initialized
@@ -32,30 +32,42 @@ The item names chosen by each player are **not** written to EE.log. OCR on the g
 | Platform | Path |
 |----------|------|
 | Windows (production) | `%LOCALAPPDATA%\Warframe\EE.log` |
-| Linux dev override | `$WF_EE_LOG` env var, fallback `./EE.log` |
+| Linux (Proton default) | `~/.local/share/Steam/steamapps/compatdata/230410/pfx/drive_c/users/steamuser/AppData/Local/Warframe/EE.log` |
+| Linux dev override | `$WF_EE_LOG` env var |
 
 The watcher (`src-tauri/src/ee_log.rs`) seeks to the end of the file on startup so it only reacts to new lines written during the current session.
 
+## Squad Size Detection
+
+`ee_log.rs` maintains a rolling buffer of the last 200 log lines. When the trigger fires, it scans recent lines for known player-count patterns:
+
+| Log pattern (case-insensitive) | Example |
+|-------------------------------|---------|
+| `relic reward choices: N` | `Net [Info]: relic reward choices: 3` |
+| `playercount` followed by digits | `Script [Info]: PlayerCount = 2` |
+
+If no pattern matches, squad size defaults to **4** (same as the legacy behaviour). The detected count is emitted as the `relic-trigger` event payload (`u32`) so the frontend can pass it to `detect_relic_rewards`.
+
+> If the patterns don't match your EE.log version, adjust `detect_squad_size` in `ee_log.rs`.
+
 ## OCR — Screen Regions
 
-Once the trigger fires, `src-tauri/src/screenshot.rs` captures four image regions from the primary display, one per reward card. Coordinates are defined for a 1920×1080 reference and scaled to the actual display resolution.
+Once the trigger fires, `src-tauri/src/screenshot.rs` captures N image strips from the primary display (N = squad size, 1–4). Each strip covers only the item-name text row of one reward card.
 
-| Card | x (ref) | y (ref) | w (ref) | h (ref) |
-|------|---------|---------|---------|---------|
-| 1 | 60 | 310 | 400 | 70 |
-| 2 | 540 | 310 | 400 | 70 |
-| 3 | 1020 | 310 | 400 | 70 |
-| 4 | 1500 | 310 | 400 | 70 |
+Proportional bounds are measured on a 2560×1440 reference and scaled to the actual game window at runtime:
 
-These coordinates were derived from WFinfo's OCR region analysis of the Warframe 1080p UI. They may need adjustment if DE changes the reward screen layout.
+| Boundary | Value |
+|----------|-------|
+| x start  | 635 / 2560 ≈ 24.8% of window width |
+| x end    | 1920 / 2560 = 75% of window width |
+| y start  | 550 / 1440 ≈ 38.2% of window height |
+| y end    | 612 / 1440 ≈ 42.5% of window height |
 
-`src-tauri/src/ocr.rs` runs Windows OCR (`Windows.Media.Ocr`) on each region via `SoftwareBitmap` (RGBA8 format). Only the **first non-empty line** of each result is kept — the item name. The remainder (rarity text, percentage) is discarded.
-
-On non-Windows builds OCR returns empty strings; use `test_trigger` from the main window to simulate a reward event.
+The x range is divided equally into N strips (one per card). For detail on the OCR engine, pixel pipeline, and platform capture implementations, see [docs/ocr.md](ocr.md).
 
 ## Item Name Resolution
 
-After OCR, raw strings are fuzzy-matched against the WFM items cache using **Jaro-Winkler similarity** (threshold 0.70). This tolerates common OCR mis-reads (e.g. `Ash Prim3 Blueprint` → `Ash Prime Blueprint`).
+After OCR, raw strings are fuzzy-matched against the WFM items cache using **Jaro-Winkler (60%) + Jaccard word-token similarity (40%)** with a combined threshold of 0.75. This tolerates common OCR mis-reads (e.g. `Ash Prim3 Blueprint` → `Ash Prime Blueprint`). A word-count gate (±1 word) prevents short OCR fragments from matching multi-word names.
 
 The cache is built from the WFM `/v2/items` response on startup and held in a `tokio::sync::RwLock<HashMap<String, CachedItem>>`.
 
@@ -112,12 +124,12 @@ The overlay is a second Tauri window (`label: "overlay"`) configured in `tauri.c
 | transparent | true |
 | decorations | false |
 | alwaysOnTop | true |
-| visible | false (shown on trigger) |
+| visible | true (always — see linux-wayland.md) |
 | skipTaskbar | true |
-| size | 1920 × 180 px |
-| position | 0, 0 (top-left) |
+| size | resized to match Warframe's physical window |
+| position | repositioned to match Warframe's screen origin |
 
-On mount the overlay calls `window.setIgnoreCursorEvents(true)` so mouse clicks pass through to the game. The window auto-hides after **30 seconds**. The card with the lowest platinum price is highlighted in gold.
+On mount the overlay calls `setIgnoreCursorEvents(true)` (fire-and-forget, not awaited) so mouse clicks pass through to the game. Content auto-hides after **30 seconds**. The card with the highest platinum value is highlighted in gold. The card grid uses `grid-template-columns: repeat(N, 1fr)` where N is the number of items returned, so it adapts automatically to 1–4 players.
 
 ## Data Flow
 
@@ -125,26 +137,30 @@ On mount the overlay calls `window.setIgnoreCursorEvents(true)` so mouse clicks 
 EE.log "Relic rewards initialized"
     │
     ▼
-ee_log::start_watcher  →  app.emit("relic-trigger")
+ee_log::start_watcher
+    ├─ scan recent lines for squad size (fallback: 4)
+    └─ app.emit("relic-trigger", player_count)
     │
     ▼  (overlay window receives event)
-invoke("detect_relic_rewards")
+playerCount = event.payload
+invoke("detect_relic_rewards", { playerCount })
     │
-    ├─ screenshot::capture_reward_regions()   [4× capture_area]
-    ├─ ocr::recognise_regions()               [4× Windows OCR]
-    └─ wfm::prices_for_names()
+    ├─ screenshot::capture_card_strips(…, player_count)  [N captures]
+    ├─ ocr::recognise_cards(regions)                     [N × ocrs inference]
+    └─ wfm::prices_for_names(names)
            ├─ fuzzy-match name → slug + ducats  (cache)
-           └─ fetch plat price  (live API × 4)
+           └─ fetch plat price  (live API × N)
     │
     ▼
-overlay renders 4 ItemPriceResult cards
+overlay renders N ItemPriceResult cards (dynamic grid)
 auto-hides after 30 s
 ```
 
 ## Known Limitations & Future Work
 
-- OCR region coordinates are hardcoded for 1920×1080; other resolutions use linear scaling which may be imprecise.
-- OCR accuracy depends on the Windows language pack. The engine uses `OcrEngine::TryCreateFromUserProfileLanguages()` which picks the first installed language.
+- Squad size detection from EE.log is best-effort; if the log patterns don't match, it falls back to 4. The patterns in `detect_squad_size` (`ee_log.rs`) may need adjustment after game updates.
+- OCR region coordinates are calibrated for 2560×1440; other resolutions use proportional scaling which may be slightly off at unusual aspect ratios.
 - Plat price shows the raw minimum sell order; it does not filter for in-game or online sellers.
 - The WFM items cache is never refreshed while the app is running; restart to pick up newly added items.
-- No handling yet for the Baro Ki'Teer (non-standard reward screen) or Arbitration rewards.
+- No handling yet for Baro Ki'Teer (non-standard reward screen) or Arbitration rewards.
+- `focus.rs` exists and checks whether Warframe is focused but is not yet wired into `detect_relic_rewards` — captures proceed regardless of window focus.

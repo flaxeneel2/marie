@@ -18,9 +18,11 @@ let
   };
 
   libraries = with pkgs; [
-    # x11rb crate: active-window focus check (works for XWayland apps like Warframe)
+    # x11rb crate: Warframe window geometry lookup via XWayland
     xorg.libX11
     xorg.libxcb
+    # gtk-layer-shell crate: wlr-layer-shell overlay surface
+    gtk-layer-shell
     # curl: used by build.rs to download ocrs models on first build
     curl
   ];

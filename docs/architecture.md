@@ -11,10 +11,10 @@
 
 | label | purpose | transparent | always-on-top | starts visible |
 |-------|---------|-------------|---------------|----------------|
-| `main` | Control panel — EE.log path, test trigger | no | no | yes |
-| `overlay` | Price overlay (1920×180 px, top of screen) | yes | yes | no |
+| `main` | Control panel — EE.log path, test buttons | no | no | yes |
+| `overlay` | Price overlay — full monitor, layer-shell surface | yes | yes (layer) | yes (always) |
 
-The overlay calls `window.setIgnoreCursorEvents(true)` on mount so clicks pass through to the game. Auto-hides after 30 seconds.
+The overlay is always present at the compositor level; Svelte's `{#if visible}` controls whether any content is rendered. On Linux/Wayland it is a wlr-layer-shell `OVERLAY`-layer surface — no window rules needed, input passthrough and z-order above fullscreen are handled by the protocol. See [docs/linux-wayland.md](linux-wayland.md). Content auto-hides after 30 seconds.
 
 ## Rust modules (`src-tauri/src/`)
 
@@ -22,8 +22,8 @@ The overlay calls `window.setIgnoreCursorEvents(true)` on mount so clicks pass t
 |------|---------------|
 | `lib.rs` | Tauri commands, app setup, wires all modules |
 | `ee_log.rs` | Tails EE.log; emits `relic-trigger` on `"Relic rewards initialized"` |
-| `focus.rs` | Active-window check — skips capture if Warframe is not focused |
-| `screenshot.rs` | Full-screen capture via xdg-desktop-portal (Linux) or direct region capture (Windows) |
+| `warframe_window.rs` | Finds Warframe's window and returns its geometry in physical pixels |
+| `screenshot.rs` | Captures N reward-card regions (N = player_count, 1–4) from the screen |
 | `ocr.rs` | Runs ocrs neural-net OCR on each reward region; returns first text line |
 | `wfm.rs` | WFM items cache (startup fetch, `RwLock<HashMap>`); live plat price fetch; Jaro-Winkler fuzzy matching |
 
@@ -31,19 +31,32 @@ The overlay calls `window.setIgnoreCursorEvents(true)` on mount so clicks pass t
 
 | command | called by | returns |
 |---------|-----------|---------|
-| `detect_relic_rewards` | overlay on `relic-trigger` | `Vec<ItemPriceResult>` |
+| `detect_relic_rewards(player_count: u32)` | overlay on `relic-trigger` | `Vec<ItemPriceResult>` |
 | `test_trigger` | main window button | — (emits `relic-trigger`) |
+| `show_test_overlay` | main window button | — (emits `relic-test-data` with fake data) |
 | `ee_log_path` | main window on mount | `String` |
 
 ## IPC / event flow
 
+**Real trigger (EE.log):**
 ```
 EE.log "Relic rewards initialized"
-  → ee_log::start_watcher emits relic-trigger
-  → overlay +page.svelte calls detect_relic_rewards
-  → focus check → screenshot → OCR → wfm cache lookup + live plat fetch
-  → 4 ItemPriceResult cards rendered, window shown
+  → ee_log::start_watcher detects squad size (fallback: 4)
+  → emits relic-trigger with player_count: u32
+  → overlay sets visible = true, calls detect_relic_rewards(player_count)
+  → screenshot (N strips) → OCR (N cards) → wfm cache lookup + live plat fetch
+  → N ItemPriceResult cards rendered (dynamic grid)
   → auto-hides after 30 s
+```
+
+**Test overlay (fake data):**
+```
+main window "Test overlay" button
+  → invoke show_test_overlay
+  → Rust: emit relic-test-data with hardcoded items
+  → overlay renders 4 cards immediately (no OCR / network)
+  → Rust: Tokio timer fires after 5 s → emit hide-overlay
+  → overlay hides
 ```
 
 ## Key environment variable
