@@ -113,8 +113,9 @@ pub async fn prices_for_names(names: Vec<String>) -> Vec<ItemPriceResult> {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Items that appear in relic rewards but have no meaningful market value.
-/// They are returned as unmatched so the overlay shows "—" for both plat and ducats.
+/// Relic reward items that have no WFM listing and no ducat value.
+/// These are fuzzy-matched as a fallback after the market search fails,
+/// so OCR noise is tolerated and new entries can be added here freely.
 const NON_MARKET: &[&str] = &[
     "forma blueprint",
     "2x forma blueprint",
@@ -139,36 +140,53 @@ fn similarity(query: &str, target: &str) -> f64 {
 /// Fix common OCR character confusions before fuzzy matching.
 /// Applied after lowercasing so substitutions are case-insensitive.
 fn normalize_ocr(s: &str) -> String {
-    // "rn" is consistently misread as "m" in thin fonts (e.g. "Prirne" → "Prime",
-    // "Systerns" → "Systems"). Apply the reverse to recover the real word.
-    // Order matters: do word-level fixes before character-level ones.
-    s.replace("rn", "m")
-     // "ii" or "ll" can appear where "n" or "u" belong in some glyphs.
-     .replace("li", "h")
-     // trailing/leading noise characters that OCR sometimes emits.
-     .replace(['|', '!', ';'], "")
-}
+    let cleaned = s.replace(['|', '!', ';', ':'], "");
+    let tokens: Vec<&str> = cleaned.split_whitespace().collect();
 
-/// Fuzzy-match `raw` against all cached item names, returning the best hit above
-/// a similarity threshold. Falls back to an empty match on failure.
-fn best_match(raw: &str, cache: &HashMap<String, CachedItem>) -> (String, Option<CachedItem>) {
-    let query = normalize_ocr(&raw.to_lowercase());
-
-    if NON_MARKET.iter().any(|&nm| query.contains(nm)) {
-        return (String::new(), None);
+    let mut out: Vec<String> = Vec::with_capacity(tokens.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        let tok = tokens[i];
+        // Re-join "2 x" → "2x": OCR sometimes splits a quantity prefix like
+        // "2x" into two tokens. Merge a purely numeric token with the next
+        // token when it is a single letter.
+        if tok.chars().all(|c| c.is_ascii_digit()) {
+            if let Some(&next) = tokens.get(i + 1) {
+                if next.len() == 1 && next.chars().next().map_or(false, |c| c.is_ascii_alphabetic()) {
+                    out.push(format!("{tok}{next}"));
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        out.push(tok.to_string());
+        i += 1;
     }
 
+    // Drop remaining isolated single-character tokens — capture-edge noise.
+    out.into_iter()
+        .filter(|tok| tok.len() > 1)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Two-step fuzzy match:
+///   1. Market items (WFM cache) — returns a CachedItem for price lookup.
+///   2. Non-market items (NON_MARKET list) — returns the name only; plat/ducats
+///      will show as "—" because there is no CachedItem to fetch prices from.
+/// Falls back to an empty unmatched result if neither step finds a hit above 0.70.
+fn best_match(raw: &str, cache: &HashMap<String, CachedItem>) -> (String, Option<CachedItem>) {
+    let query = normalize_ocr(&raw.to_lowercase());
     let q_words = query.split_whitespace().count();
+
+    // ── Step 1: market items ──────────────────────────────────────────────────
     let mut best_score = 0.0_f64;
     let mut best_name = String::new();
     let mut best_item: Option<CachedItem> = None;
 
     for (name, item) in cache.iter() {
-        // Hard gate: word count must be within ±1 — prevents short OCR fragments
-        // from matching multi-word item names and vice-versa.
         let t_words = name.split_whitespace().count();
         if q_words.abs_diff(t_words) > 1 { continue; }
-
         let score = similarity(&query, name);
         if score > best_score {
             best_score = score;
@@ -177,10 +195,30 @@ fn best_match(raw: &str, cache: &HashMap<String, CachedItem>) -> (String, Option
         }
     }
 
-    eprintln!("[wfm] best match for {query:?}: {best_name:?} (score {best_score:.3})");
+    eprintln!("[wfm] market match for {query:?}: {best_name:?} (score {best_score:.3})");
 
-    if best_score >= 0.75 {
-        (best_name, best_item)
+    if best_score >= 0.70 {
+        return (best_name, best_item);
+    }
+
+    // ── Step 2: non-market items ──────────────────────────────────────────────
+    let mut best_nm_score = 0.0_f64;
+    let mut best_nm_name = String::new();
+
+    for &name in NON_MARKET {
+        let t_words = name.split_whitespace().count();
+        if q_words.abs_diff(t_words) > 1 { continue; }
+        let score = similarity(&query, name);
+        if score > best_nm_score {
+            best_nm_score = score;
+            best_nm_name = name.to_string();
+        }
+    }
+
+    eprintln!("[wfm] non-market match for {query:?}: {best_nm_name:?} (score {best_nm_score:.3})");
+
+    if best_nm_score >= 0.70 {
+        (best_nm_name, None)
     } else {
         (String::new(), None)
     }
