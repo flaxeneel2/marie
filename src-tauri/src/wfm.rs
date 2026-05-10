@@ -136,10 +136,23 @@ fn similarity(query: &str, target: &str) -> f64 {
     0.6 * jw + 0.4 * jaccard
 }
 
+/// Fix common OCR character confusions before fuzzy matching.
+/// Applied after lowercasing so substitutions are case-insensitive.
+fn normalize_ocr(s: &str) -> String {
+    // "rn" is consistently misread as "m" in thin fonts (e.g. "Prirne" → "Prime",
+    // "Systerns" → "Systems"). Apply the reverse to recover the real word.
+    // Order matters: do word-level fixes before character-level ones.
+    s.replace("rn", "m")
+     // "ii" or "ll" can appear where "n" or "u" belong in some glyphs.
+     .replace("li", "h")
+     // trailing/leading noise characters that OCR sometimes emits.
+     .replace(['|', '!', ';'], "")
+}
+
 /// Fuzzy-match `raw` against all cached item names, returning the best hit above
 /// a similarity threshold. Falls back to an empty match on failure.
 fn best_match(raw: &str, cache: &HashMap<String, CachedItem>) -> (String, Option<CachedItem>) {
-    let query = raw.to_lowercase();
+    let query = normalize_ocr(&raw.to_lowercase());
 
     if NON_MARKET.iter().any(|&nm| query.contains(nm)) {
         return (String::new(), None);

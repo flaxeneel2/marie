@@ -20,14 +20,12 @@ static ENGINE: Lazy<Result<OcrEngine, String>> = Lazy::new(|| {
 
 /// Run OCR on all card strips in parallel and return one name per card.
 pub async fn recognise_cards(regions: Vec<(Vec<u8>, u32, u32)>) -> Vec<String> {
-    // Spawn all blocking tasks before awaiting any — they run concurrently on
-    // the Tokio blocking thread pool.
     let handles: Vec<_> = regions
         .into_iter()
         .enumerate()
         .map(|(i, (pixels, w, h))| {
             tokio::task::spawn_blocking(move || {
-                let result = ocr_card(&pixels, w, h);
+                let result = ocr_card(&pixels, w, h, i);
                 eprintln!("[ocr] card {i} ({w}×{h}): {result:?}");
                 result
             })
@@ -43,25 +41,26 @@ pub async fn recognise_cards(regions: Vec<(Vec<u8>, u32, u32)>) -> Vec<String> {
 
 /// OCR a single card strip and return the item name (all text lines joined,
 /// to handle word-wrapped names like "Vauban Prime Chassis / Blueprint").
-fn ocr_card(pixels: &[u8], width: u32, height: u32) -> Option<String> {
+fn ocr_card(pixels: &[u8], width: u32, height: u32, idx: usize) -> Option<String> {
     let engine = match ENGINE.as_ref() {
         Ok(e) => e,
         Err(e) => { eprintln!("[ocr] engine init failed: {e}"); return None; }
     };
 
-    // Invert luminance: Warframe UI is white-on-dark; ocrs trained on dark-on-light.
-    let rgb: Vec<u8> = pixels
-        .chunks(4)
-        .flat_map(|p| [255 - p[0], 255 - p[1], 255 - p[2]])
-        .collect();
+    // Save the raw capture before any processing.
+    save_ppm_rgba(pixels, width, height, &format!("/tmp/marie_card{idx}_raw.ppm"));
 
-    let source = ImageSource::from_bytes(&rgb, (width, height)).ok()?;
+    let (rgb, w, h) = preprocess(pixels, width, height);
+
+    // Save what the OCR engine actually sees.
+    save_ppm_rgb(&rgb, w, h, &format!("/tmp/marie_card{idx}_proc.ppm"));
+
+    let source = ImageSource::from_bytes(&rgb, (w, h)).ok()?;
     let input = engine.prepare_input(source).ok()?;
     let words = engine.detect_words(&input).ok()?;
     let lines = engine.find_text_lines(&input, &words);
     let texts = engine.recognize_text(&input, &lines).ok()?;
 
-    // Join all recognised lines — handles two-row word-wrapped names.
     let joined: String = texts
         .into_iter()
         .flatten()
@@ -71,4 +70,53 @@ fn ocr_card(pixels: &[u8], width: u32, height: u32) -> Option<String> {
         .join(" ");
 
     if joined.trim().is_empty() { None } else { Some(joined) }
+}
+
+/// Strip alpha and upscale 3×. No colour manipulation — the text colour is
+/// user-configurable so any colour-based heuristic will break for some players,
+/// and the raw image already gives ocrs more signal than our previous attempts
+/// at contrast enhancement.
+fn preprocess(pixels: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u32) {
+    let w = width as usize;
+    let h = height as usize;
+    let rgb: Vec<u8> = pixels.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+    upscale3x_rgb(&rgb, w, h)
+}
+
+fn upscale3x_rgb(rgb: &[u8], w: usize, h: usize) -> (Vec<u8>, u32, u32) {
+    let nw = w * 3;
+    let nh = h * 3;
+    let mut out = vec![0u8; nw * nh * 3];
+    for y in 0..h {
+        for x in 0..w {
+            let src = &rgb[(y * w + x) * 3..(y * w + x) * 3 + 3];
+            for dy in 0..3usize {
+                for dx in 0..3usize {
+                    let dst = ((y * 3 + dy) * nw + (x * 3 + dx)) * 3;
+                    out[dst..dst + 3].copy_from_slice(src);
+                }
+            }
+        }
+    }
+    (out, nw as u32, nh as u32)
+}
+
+/// Write an RGBA buffer as a plain-PPM (P6) file, dropping the alpha channel.
+/// PPM needs no external crate and opens in any image viewer.
+fn save_ppm_rgba(pixels: &[u8], w: u32, h: u32, path: &str) {
+    use std::io::Write;
+    let Ok(mut f) = std::fs::File::create(path) else { return };
+    let _ = write!(f, "P6\n{w} {h}\n255\n");
+    let rgb: Vec<u8> = pixels.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+    let _ = f.write_all(&rgb);
+    eprintln!("[ocr] saved raw  → {path}");
+}
+
+/// Write an RGB buffer as a plain-PPM (P6) file.
+fn save_ppm_rgb(pixels: &[u8], w: u32, h: u32, path: &str) {
+    use std::io::Write;
+    let Ok(mut f) = std::fs::File::create(path) else { return };
+    let _ = write!(f, "P6\n{w} {h}\n255\n");
+    let _ = f.write_all(pixels);
+    eprintln!("[ocr] saved proc → {path}");
 }
