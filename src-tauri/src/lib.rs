@@ -5,31 +5,7 @@ mod warframe_window;
 mod wfm;
 
 use tauri::{AppHandle, Emitter, Manager};
-use warframe_window::WindowGeometry;
 use wfm::ItemPriceResult;
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Convert a Tauri `Monitor` to `WindowGeometry` in **physical** pixels.
-///
-/// `Monitor::size()` returns logical pixels on Wayland/HiDPI; multiplying by
-/// `scale_factor()` gives the true physical resolution that `set_size(PhysicalSize)`
-/// expects.
-fn monitor_geometry(m: tauri::Monitor) -> WindowGeometry {
-    let scale = m.scale_factor();
-    WindowGeometry {
-        x: m.position().x,
-        y: m.position().y,
-        width:  (m.size().width  as f64 * scale).round() as u32,
-        height: (m.size().height as f64 * scale).round() as u32,
-    }
-}
-
-/// Geometry to cover the game window, falling back to the primary monitor.
-fn overlay_geometry(overlay: &tauri::WebviewWindow) -> Option<WindowGeometry> {
-    warframe_window::find_warframe_geometry()
-        .or_else(|| overlay.primary_monitor().ok().flatten().map(monitor_geometry))
-}
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
@@ -44,25 +20,13 @@ async fn detect_relic_rewards(player_count: u32) -> Result<Vec<ItemPriceResult>,
 }
 
 #[tauri::command]
-fn get_warframe_geometry() -> Option<WindowGeometry> {
-    warframe_window::find_warframe_geometry()
-}
-
-#[tauri::command]
 fn test_trigger(app: AppHandle, player_count: u32) {
     app.emit("relic-trigger", player_count.clamp(1, 4)).ok();
 }
 
-/// Positions the overlay over Warframe then emits fake price data — bypasses
-/// OCR so the overlay UI can be tested without the game running.
+/// Emits fake price data so the overlay UI can be tested without the game running.
 #[tauri::command]
 fn show_test_overlay(app: AppHandle) {
-    if let Some(overlay) = app.get_webview_window("overlay") {
-        if let Some(g) = overlay_geometry(&overlay) {
-            overlay.set_position(tauri::PhysicalPosition::new(g.x, g.y)).ok();
-            overlay.set_size(tauri::PhysicalSize::new(g.width, g.height)).ok();
-        }
-    }
     app.emit("relic-test-data", vec![
         ItemPriceResult { ocr_text: "Ash Prime Blueprint".into(),      matched_name: "Ash Prime Blueprint".into(),      slug: "ash_prime_blueprint".into(),      ducats: Some(45), plat_min_sell: Some(12) },
         ItemPriceResult { ocr_text: "Volt Prime Chassis".into(),       matched_name: "Volt Prime Chassis".into(),       slug: "volt_prime_chassis".into(),       ducats: Some(65), plat_min_sell: Some(8)  },
@@ -70,8 +34,8 @@ fn show_test_overlay(app: AppHandle) {
         ItemPriceResult { ocr_text: "Orokin Reactor Blueprint".into(), matched_name: "Orokin Reactor Blueprint".into(), slug: "orokin_reactor_blueprint".into(), ducats: None,     plat_min_sell: Some(25) },
     ]).ok();
 
-    // Timer lives in Tokio, not WebKit — the overlay's nofocus window rule causes
-    // WebKitGTK to throttle setTimeout in background pages, so JS timers never fire.
+    // Dismiss timer runs in Tokio: WebKitGTK throttles JS timers on windows
+    // that never receive keyboard focus (which layer-shell KeyboardMode::None guarantees).
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -92,21 +56,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             detect_relic_rewards,
-            get_warframe_geometry,
             test_trigger,
             show_test_overlay,
             ee_log_path,
         ])
         .setup(|app| {
-            // Size the overlay to cover Warframe, falling back to the primary monitor
-            // when the game isn't running yet. This runs before the webview renders,
-            // so the 1×1 placeholder size in tauri.conf.json is never visible.
+            #[cfg(target_os = "linux")]
             if let Some(overlay) = app.get_webview_window("overlay") {
-                if let Some(g) = overlay_geometry(&overlay) {
-                    overlay.set_position(tauri::PhysicalPosition::new(g.x, g.y)).ok();
-                    overlay.set_size(tauri::PhysicalSize::new(g.width, g.height)).ok();
-                    eprintln!("[marie] overlay sized to {}×{} at ({},{})", g.width, g.height, g.x, g.y);
-                }
+                init_layer_shell(&overlay);
             }
 
             tauri::async_runtime::spawn(async move {
@@ -120,4 +77,45 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+// ── Layer shell init (Linux / Wayland only) ───────────────────────────────────
+
+#[cfg(target_os = "linux")]
+fn init_layer_shell(overlay: &tauri::WebviewWindow) {
+    use gtk_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+
+    let win = match overlay.gtk_window() {
+        Ok(w) => w,
+        Err(e) => { eprintln!("[marie] overlay: could not get GTK window: {e}"); return; }
+    };
+
+    if !gtk_layer_shell::is_supported() {
+        eprintln!("[marie] overlay: wlr-layer-shell not available — falling back to XDG shell (add Hyprland window rules)");
+        return;
+    }
+
+    win.init_layer_shell();
+    win.set_layer(Layer::Overlay);
+    win.set_anchor(Edge::Left,   true);
+    win.set_anchor(Edge::Right,  true);
+    win.set_anchor(Edge::Top,    true);
+    win.set_anchor(Edge::Bottom, true);
+    // -1: don't push panels/taskbars; surface floats above everything
+    win.set_exclusive_zone(-1);
+    win.set_keyboard_mode(KeyboardMode::None);
+    win.set_namespace("marie-overlay");
+
+    // Window was created hidden (visible:false in tauri.conf.json) so that
+    // init_layer_shell could run before the GTK window was mapped.  Show it now.
+    use gtk::prelude::WidgetExt;
+    win.show_all();
+
+    // Make the entire surface click-through by setting an empty input region.
+    // On Wayland this becomes wl_surface.set_input_region(empty), so all pointer
+    // events pass straight through to whatever is underneath.
+    let empty = cairo::Region::create();
+    win.input_shape_combine_region(Some(&empty));
+
+    eprintln!("[marie] overlay: wlr-layer-shell initialised (OVERLAY layer, full-screen, no keyboard)");
 }
