@@ -10,3 +10,4 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 # ocrs neural-network models (downloaded at build time by build.rs)
 src-tauri/models/
+.direnv

@@ -18,6 +18,52 @@ static ENGINE: Lazy<Result<OcrEngine, String>> = Lazy::new(|| {
     .map_err(|e| e.to_string())
 });
 
+/// Run OCR on riven panels and return individual text lines per panel.
+/// Unlike recognise_cards, lines are NOT joined — the caller parses them.
+pub async fn recognise_riven_panels(regions: Vec<(Vec<u8>, u32, u32)>) -> Vec<Vec<String>> {
+    let handles: Vec<_> = regions
+        .into_iter()
+        .enumerate()
+        .map(|(i, (pixels, w, h))| {
+            tokio::task::spawn_blocking(move || {
+                let lines = ocr_riven_panel(&pixels, w, h, i);
+                eprintln!("[ocr] riven panel {i} ({w}×{h}): {} lines", lines.len());
+                lines
+            })
+        })
+        .collect();
+
+    let mut out = Vec::with_capacity(handles.len());
+    for h in handles {
+        out.push(h.await.unwrap_or_default());
+    }
+    out
+}
+
+/// OCR a riven panel and return each text line separately (not joined).
+fn ocr_riven_panel(pixels: &[u8], width: u32, height: u32, idx: usize) -> Vec<String> {
+    let engine = match ENGINE.as_ref() {
+        Ok(e) => e,
+        Err(e) => { eprintln!("[ocr] engine init failed: {e}"); return vec![]; }
+    };
+
+    save_ppm_rgba(pixels, width, height, &format!("/tmp/marie_riven{idx}_raw.ppm"));
+    let (rgb, w, h) = preprocess(pixels, width, height);
+    save_ppm_rgb(&rgb, w, h, &format!("/tmp/marie_riven{idx}_proc.ppm"));
+
+    let Some(source) = ImageSource::from_bytes(&rgb, (w, h)).ok() else { return vec![]; };
+    let Some(input)  = engine.prepare_input(source).ok()          else { return vec![]; };
+    let Some(words)  = engine.detect_words(&input).ok()            else { return vec![]; };
+    let lines = engine.find_text_lines(&input, &words);
+    let Some(texts)  = engine.recognize_text(&input, &lines).ok()  else { return vec![]; };
+
+    texts.into_iter()
+        .flatten()
+        .map(|line| line.to_string())
+        .filter(|s| !s.trim().is_empty())
+        .collect()
+}
+
 /// Run OCR on all card strips in parallel and return one name per card.
 pub async fn recognise_cards(regions: Vec<(Vec<u8>, u32, u32)>) -> Vec<String> {
     let handles: Vec<_> = regions

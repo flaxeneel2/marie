@@ -5,6 +5,29 @@ const TEXT_X_END:   f32 = 1920.0 / 2560.0;
 const TEXT_Y_START: f32 = 550.0  / 1440.0;
 const TEXT_Y_END:   f32 = 612.0  / 1440.0;
 
+// Riven stat text region — calibrated on a 2560×1440 display from a real session log.
+// Covers the OmegaRerollSelection stat panel: the same region is captured twice —
+// once when the screen opens (current/old stats) and once after rolling (new stats).
+const RIVEN_STAT_X_START: f32 = 1110.0 / 2560.0;
+const RIVEN_STAT_X_END:   f32 = 1460.0 / 2560.0;
+const RIVEN_STAT_Y_START: f32 =  915.0 / 1440.0;
+const RIVEN_STAT_Y_END:   f32 = 1100.0 / 1440.0;
+
+/// Capture the riven stat text region from the OmegaRerollSelection screen.
+/// Called twice per roll cycle: once on screen-open (current stats) and once
+/// after the roll (new stats). Same region both times; content changes.
+pub async fn capture_riven_stat_region(
+    win_x: i32, win_y: i32, win_w: u32, win_h: u32,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    let (rx, ry, rw, rh) = frac_rect(
+        RIVEN_STAT_X_START, RIVEN_STAT_X_END,
+        RIVEN_STAT_Y_START, RIVEN_STAT_Y_END,
+        win_w, win_h,
+    );
+    eprintln!("[screenshot] riven stat region: {rw}×{rh} at ({rx},{ry})");
+    platform::capture_rect(win_x, win_y, (rx, ry, rw, rh)).await
+}
+
 /// Capture one RGBA strip per reward card, all covering the item-name text rows.
 /// Cards are equally spaced across the measured x range.
 /// `player_count` must be 1–4; values outside that range are clamped.

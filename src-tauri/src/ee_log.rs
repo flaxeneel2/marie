@@ -40,6 +40,36 @@ pub fn log_path() -> PathBuf {
 // moment the reward screen becomes visible.
 const TRIGGER: &str = "Relic rewards initialized";
 
+// The SWF creation line is the earliest reliable signal that the reroll screen
+// is open and the current stats are visible.
+const RIVEN_OPEN: &str = "Created /Lotus/Interface/OmegaRerollSelection.swf";
+
+// Player confirmed spending Kuva — a roll is now in flight on the server.
+const RIVEN_SEND_RESULT: &str = "Dialog::SendResult(4)";
+
+// Appears in the very next Dialog line after SendResult(4) when spending Kuva.
+// Distinguishes "confirm roll" from "confirm keep/reject" (which has no PleaseWait).
+const RIVEN_LOADING: &str = "NavBar_QuickMatchPleaseWait";
+
+// New stats have arrived and the accept/reject comparison is on screen.
+const RIVEN_ROLLED: &str = "Cycle Riven into current selection?";
+
+// Extra delay before OCR on the rolled event — the stats panel needs a moment
+// to finish its transition animation after the dialog appears.
+const RIVEN_OCR_DELAY: std::time::Duration = std::time::Duration::from_millis(3000);
+
+// Delay before capturing the initial riven stats — the SWF creation line fires
+// before the stat panel finishes rendering its transition animation.
+const RIVEN_OPEN_DELAY: std::time::Duration = std::time::Duration::from_millis(2000);
+
+// Maximum gap between SendResult(4) and QuickMatchPleaseWait for them to be
+// treated as a single "confirm roll" event. Dialogs within the riven screen
+// appear on consecutive lines so they arrive well within this window.
+const SEND_RESULT_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+
+// Log line that fires when the riven reroll SWF is destroyed (screen closed).
+const RIVEN_CLOSE: &str = "Destroyed /Lotus/Interface/OmegaRerollSelection.swf";
+
 // Marks the start of a new fissure reward sequence; resets the card counter.
 const MISSION_START: &str = "ProjectionsCountdown.swf";
 
@@ -119,6 +149,13 @@ pub fn start_watcher(app: AppHandle) {
         let mut recent: std::collections::VecDeque<String> =
             std::collections::VecDeque::with_capacity(RECENT_LINE_BUFFER);
 
+        // Riven session tracking (local to this thread — no shared state needed).
+        let mut riven_active = false;
+        // Timestamp of the last SendResult(4) line seen while riven_active.
+        // QuickMatchPleaseWait is only treated as a roll confirmation if it
+        // arrives within SEND_RESULT_WINDOW of this timestamp.
+        let mut last_send_result: Option<std::time::Instant> = None;
+
         for event in rx.iter() {
             if event.is_err() {
                 continue;
@@ -146,6 +183,41 @@ pub fn start_watcher(app: AppHandle) {
                             );
                             std::thread::sleep(TRIGGER_DELAY);
                             app.emit("relic-trigger", player_count).ok();
+                        }
+
+                        if line.contains(RIVEN_OPEN) {
+                            eprintln!("[marie] riven reroll screen opened — capturing current stats");
+                            riven_active = true;
+                            last_send_result = None;
+                            std::thread::sleep(RIVEN_OPEN_DELAY);
+                            app.emit("riven-screen-open", ()).ok();
+                        }
+
+                        if line.contains(RIVEN_CLOSE) {
+                            eprintln!("[marie] riven reroll screen closed");
+                            riven_active = false;
+                            last_send_result = None;
+                        }
+
+                        if riven_active {
+                            if line.contains(RIVEN_SEND_RESULT) {
+                                last_send_result = Some(std::time::Instant::now());
+                            } else if line.contains(RIVEN_LOADING) {
+                                // Only treat as roll confirmation if SendResult(4) was very recent.
+                                let is_roll = last_send_result
+                                    .map(|t| t.elapsed() < SEND_RESULT_WINDOW)
+                                    .unwrap_or(false);
+                                if is_roll {
+                                    eprintln!("[marie] riven rolling — waiting for new stats");
+                                    last_send_result = None;
+                                    app.emit("riven-rolling", ()).ok();
+                                }
+                            } else if line.contains(RIVEN_ROLLED) {
+                                last_send_result = None;
+                                eprintln!("[marie] riven new stats on screen — OCR in {RIVEN_OCR_DELAY:?}");
+                                std::thread::sleep(RIVEN_OCR_DELAY);
+                                app.emit("riven-reroll", ()).ok();
+                            }
                         }
                     }
                     Err(_) => break,

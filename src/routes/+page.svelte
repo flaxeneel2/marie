@@ -9,15 +9,17 @@
   let overrideEnabled = $state(false);
   let playerCount = $state(4);
 
-  onMount(async () => {
-    logPath = await invoke<string>('ee_log_path');
+  onMount(() => {
+    invoke<string>('ee_log_path').then(p => (logPath = p));
 
     // Mirror the overlay's trigger listener so the readout stays in sync
     // with whatever the EE.log watcher detects.
-    const unlisten = await listen<number>('relic-trigger', (event) => {
+    const cleanups: Array<() => void> = [];
+    listen<number>('relic-trigger', (event) => {
       detectedCount = event.payload;
-    });
-    return unlisten;
+    }).then(fn => cleanups.push(fn));
+
+    return () => cleanups.forEach(fn => fn());
   });
 
   function effectiveCount(): number {
@@ -34,6 +36,18 @@
   async function testOverlay() {
     triggerStatus = 'Overlay shown with fake data.';
     await invoke('show_test_overlay');
+    setTimeout(() => (triggerStatus = ''), 4000);
+  }
+
+  async function testRivenTrigger() {
+    triggerStatus = 'Riven trigger sent — check the overlay window.';
+    await invoke('test_riven_trigger');
+    setTimeout(() => (triggerStatus = ''), 4000);
+  }
+
+  async function testRivenOverlay() {
+    triggerStatus = 'Riven overlay shown with fake data.';
+    await invoke('show_test_riven_overlay');
     setTimeout(() => (triggerStatus = ''), 4000);
   }
 </script>
@@ -61,7 +75,7 @@
   </section>
 
   <section>
-    <h2>Development</h2>
+    <h2>Relics — Development</h2>
     <p>Send a test trigger to open the overlay and exercise the OCR + price pipeline:</p>
     <div class="player-count-row">
       <span class="player-count-label">Players</span>
@@ -85,6 +99,13 @@
     {#if triggerStatus}
       <p class="status">{triggerStatus}</p>
     {/if}
+  </section>
+
+  <section>
+    <h2>Rivens — Development</h2>
+    <p>Send a test trigger to exercise the OCR + grading pipeline on the real game screen:</p>
+    <button onclick={testRivenTrigger}>Send test trigger</button>
+    <button class="secondary" onclick={testRivenOverlay}>Test overlay (fake data)</button>
   </section>
 </main>
 

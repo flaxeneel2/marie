@@ -1,11 +1,18 @@
 mod ee_log;
 mod ocr;
+mod riven;
 mod screenshot;
 mod warframe_window;
 mod wfm;
 
+use once_cell::sync::Lazy;
 use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::Mutex;
 use wfm::ItemPriceResult;
+
+// Last successfully OCR'd riven stat lines. On each roll this becomes the "old"
+// snapshot — the fresh OCR result is stored here for the next roll to use as old.
+static CURRENT_RIVEN_LINES: Lazy<Mutex<Option<Vec<String>>>> = Lazy::new(|| Mutex::new(None));
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
@@ -48,6 +55,64 @@ fn ee_log_path() -> String {
     ee_log::log_path().display().to_string()
 }
 
+/// Called when the riven reroll screen opens (before any rolling).
+/// Screenshots the stat region and stores the lines as the current snapshot.
+#[tauri::command]
+async fn capture_current_riven() -> Result<(), String> {
+    let geo = warframe_window::find_warframe_geometry()
+        .ok_or_else(|| "Warframe window not found — is the game running?".to_string())?;
+
+    let region = screenshot::capture_riven_stat_region(geo.x, geo.y, geo.width, geo.height).await?;
+    let lines = ocr::recognise_riven_panels(vec![region]).await
+        .into_iter().next().unwrap_or_default();
+
+    eprintln!("[marie] captured {} current riven lines", lines.len());
+    *CURRENT_RIVEN_LINES.lock().await = Some(lines);
+    Ok(())
+}
+
+/// Called when new stats are on screen (after each roll).
+/// Rotates: CURRENT becomes old, fresh OCR becomes the new CURRENT, grades both.
+#[tauri::command]
+async fn grade_riven_reroll() -> Result<riven::RivenRerollResult, String> {
+    let geo = warframe_window::find_warframe_geometry()
+        .ok_or_else(|| "Warframe window not found — is the game running?".to_string())?;
+
+    let region = screenshot::capture_riven_stat_region(geo.x, geo.y, geo.width, geo.height).await?;
+    let new_lines = ocr::recognise_riven_panels(vec![region]).await
+        .into_iter().next().unwrap_or_default();
+
+    // Rotate: whatever was current becomes old, new OCR becomes the new current.
+    let old_lines = {
+        let mut guard = CURRENT_RIVEN_LINES.lock().await;
+        let old = guard.take().unwrap_or_default();
+        *guard = Some(new_lines.clone());
+        old
+    };
+
+    eprintln!("[marie] grading: {} old lines, {} new lines", old_lines.len(), new_lines.len());
+    Ok(riven::grade_panels(old_lines, new_lines).await)
+}
+
+/// Fires the riven-reroll event so the overlay exercises the real OCR + grading
+/// pipeline. Mirrors how test_trigger works for relics.
+#[tauri::command]
+fn test_riven_trigger(app: AppHandle) {
+    app.emit("riven-reroll", ()).ok();
+}
+
+/// Sends pre-baked fake data directly to the overlay, bypassing OCR entirely.
+#[tauri::command]
+fn show_test_riven_overlay(app: AppHandle) {
+    app.emit("riven-test-data", riven::fake_reroll_result()).ok();
+
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        app2.emit("hide-riven-overlay", ()).ok();
+    });
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -59,6 +124,10 @@ pub fn run() {
             test_trigger,
             show_test_overlay,
             ee_log_path,
+            capture_current_riven,
+            grade_riven_reroll,
+            test_riven_trigger,
+            show_test_riven_overlay,
         ])
         .setup(|app| {
             #[cfg(target_os = "linux")]
@@ -70,6 +139,12 @@ pub fn run() {
                 match wfm::init_cache().await {
                     Ok(n) => eprintln!("[marie] WFM cache ready: {n} items"),
                     Err(e) => eprintln!("[marie] WFM cache failed: {e}"),
+                }
+            });
+            tauri::async_runtime::spawn(async move {
+                match riven::init_riven_cache().await {
+                    Ok((w, a)) => eprintln!("[marie] riven cache ready: {w} weapons, {a} attributes"),
+                    Err(e) => eprintln!("[marie] riven cache failed: {e}"),
                 }
             });
             ee_log::start_watcher(app.handle().clone());
