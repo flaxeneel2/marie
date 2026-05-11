@@ -56,31 +56,40 @@ fn ee_log_path() -> String {
 }
 
 /// Called when the riven reroll screen opens (before any rolling).
-/// Screenshots the stat region and stores the lines as the current snapshot.
+/// OCRs the stat region, stores lines as baseline, returns the graded result for immediate display.
 #[tauri::command]
-async fn capture_current_riven() -> Result<(), String> {
+async fn capture_current_riven() -> Result<riven::RivenRollGrade, String> {
+    eprintln!("[riven] capture_current_riven called — OCR starting");
     let geo = warframe_window::find_warframe_geometry()
         .ok_or_else(|| "Warframe window not found — is the game running?".to_string())?;
 
+    eprintln!("[riven] window found at ({},{}) {}×{}", geo.x, geo.y, geo.width, geo.height);
     let region = screenshot::capture_riven_stat_region(geo.x, geo.y, geo.width, geo.height).await?;
+    eprintln!("[riven] screenshot captured, running OCR…");
     let lines = ocr::recognise_riven_panels(vec![region]).await
         .into_iter().next().unwrap_or_default();
 
-    eprintln!("[marie] captured {} current riven lines", lines.len());
-    *CURRENT_RIVEN_LINES.lock().await = Some(lines);
-    Ok(())
+    eprintln!("[riven] capture_current_riven done — {} lines: {:?}", lines.len(), lines);
+    *CURRENT_RIVEN_LINES.lock().await = Some(lines.clone());
+    // Grade the current state for immediate overlay display.
+    Ok(riven::grade_panels(lines.clone(), lines).await.new)
 }
 
 /// Called when new stats are on screen (after each roll).
 /// Rotates: CURRENT becomes old, fresh OCR becomes the new CURRENT, grades both.
 #[tauri::command]
 async fn grade_riven_reroll() -> Result<riven::RivenRerollResult, String> {
+    eprintln!("[riven] grade_riven_reroll called — OCR starting for new stats");
     let geo = warframe_window::find_warframe_geometry()
         .ok_or_else(|| "Warframe window not found — is the game running?".to_string())?;
 
+    eprintln!("[riven] window found at ({},{}) {}×{}", geo.x, geo.y, geo.width, geo.height);
     let region = screenshot::capture_riven_stat_region(geo.x, geo.y, geo.width, geo.height).await?;
+    eprintln!("[riven] screenshot captured, running OCR…");
     let new_lines = ocr::recognise_riven_panels(vec![region]).await
         .into_iter().next().unwrap_or_default();
+
+    eprintln!("[riven] new OCR lines ({}): {:?}", new_lines.len(), new_lines);
 
     // Rotate: whatever was current becomes old, new OCR becomes the new current.
     let old_lines = {
@@ -90,7 +99,7 @@ async fn grade_riven_reroll() -> Result<riven::RivenRerollResult, String> {
         old
     };
 
-    eprintln!("[marie] grading: {} old lines, {} new lines", old_lines.len(), new_lines.len());
+    eprintln!("[riven] grading: {} old lines, {} new lines", old_lines.len(), new_lines.len());
     Ok(riven::grade_panels(old_lines, new_lines).await)
 }
 

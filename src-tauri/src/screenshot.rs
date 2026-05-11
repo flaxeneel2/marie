@@ -8,9 +8,9 @@ const TEXT_Y_END:   f32 = 612.0  / 1440.0;
 // Riven stat text region — calibrated on a 2560×1440 display from a real session log.
 // Covers the OmegaRerollSelection stat panel: the same region is captured twice —
 // once when the screen opens (current/old stats) and once after rolling (new stats).
-const RIVEN_STAT_X_START: f32 = 1110.0 / 2560.0;
+const RIVEN_STAT_X_START: f32 = 1105.0 / 2560.0;
 const RIVEN_STAT_X_END:   f32 = 1460.0 / 2560.0;
-const RIVEN_STAT_Y_START: f32 =  915.0 / 1440.0;
+const RIVEN_STAT_Y_START: f32 =  880.0 / 1440.0;
 const RIVEN_STAT_Y_END:   f32 = 1100.0 / 1440.0;
 
 /// Capture the riven stat text region from the OmegaRerollSelection screen.

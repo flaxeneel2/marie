@@ -89,6 +89,9 @@ pub struct ParsedStat {
     pub is_negative: bool,
     /// True when positiveIsNegative=true and this stat rolled positive (e.g. +Recoil = bad).
     pub effective_negative: bool,
+    /// True for 'x'-prefix faction/damage-type multiplier stats (e.g. "x1.7 Grineer Damage").
+    /// These display as "x0.49" not "+49%".
+    pub is_multiplier: bool,
     pub weight: f32,
     pub weight_label: String,
 }
@@ -196,9 +199,9 @@ pub fn fake_reroll_result() -> RivenRerollResult {
         disposition: 0.5,
         weapon_tier: "S".into(),
         stats: vec![
-            ParsedStat { slug: "fire_rate".into(),   display_name: "Fire Rate".into(),   value: 62.3, is_negative: false, effective_negative: false, weight: 0.75, weight_label: "Great".into() },
-            ParsedStat { slug: "reload_speed".into(), display_name: "Reload Speed".into(), value: 48.7, is_negative: false, effective_negative: false, weight: 0.5,  weight_label: "Good".into()  },
-            ParsedStat { slug: "damage".into(),      display_name: "Damage".into(),      value: 54.1, is_negative: true,  effective_negative: false, weight: 0.0,  weight_label: "Dump".into()  },
+            ParsedStat { slug: "fire_rate".into(),   display_name: "Fire Rate".into(),   value: 62.3, is_negative: false, is_multiplier: false, effective_negative: false, weight: 0.75, weight_label: "Great".into() },
+            ParsedStat { slug: "reload_speed".into(), display_name: "Reload Speed".into(), value: 48.7, is_negative: false, is_multiplier: false, effective_negative: false, weight: 0.5,  weight_label: "Good".into()  },
+            ParsedStat { slug: "damage".into(),      display_name: "Damage".into(),      value: 54.1, is_negative: true,  is_multiplier: false, effective_negative: false, weight: 0.0,  weight_label: "Dump".into()  },
         ],
         roll_count: 10,
         build_score: 0.38,
@@ -212,9 +215,9 @@ pub fn fake_reroll_result() -> RivenRerollResult {
         disposition: 0.5,
         weapon_tier: "S".into(),
         stats: vec![
-            ParsedStat { slug: "critical_chance".into(), display_name: "Critical Chance".into(), value: 77.3, is_negative: false, effective_negative: false, weight: 1.0,  weight_label: "God".into()   },
-            ParsedStat { slug: "multishot".into(),        display_name: "Multishot".into(),        value: 88.1, is_negative: false, effective_negative: false, weight: 1.0,  weight_label: "God".into()   },
-            ParsedStat { slug: "zoom".into(),             display_name: "Zoom".into(),             value: 34.6, is_negative: true,  effective_negative: false, weight: 0.0,  weight_label: "Dump".into()  },
+            ParsedStat { slug: "critical_chance".into(), display_name: "Critical Chance".into(), value: 77.3, is_negative: false, is_multiplier: false, effective_negative: false, weight: 1.0,  weight_label: "God".into()   },
+            ParsedStat { slug: "multishot".into(),        display_name: "Multishot".into(),        value: 88.1, is_negative: false, is_multiplier: false, effective_negative: false, weight: 1.0,  weight_label: "God".into()   },
+            ParsedStat { slug: "zoom".into(),             display_name: "Zoom".into(),             value: 34.6, is_negative: true,  is_multiplier: false, effective_negative: false, weight: 0.0,  weight_label: "Dump".into()  },
         ],
         roll_count: 11,
         build_score: 1.0,
@@ -238,10 +241,10 @@ fn build_grade(
     let roll_count = parse_roll_count(&lines);
 
     let raw = parse_stat_lines(&lines, attrs);
-    let stats: Vec<ParsedStat> = raw.into_iter().map(|(slug, display_name, value, is_negative, attr)| {
+    let stats: Vec<ParsedStat> = raw.into_iter().map(|(slug, display_name, value, is_negative, is_multiplier, attr)| {
         let effective_negative = attr.as_ref().map(|a| a.positive_is_negative && !is_negative).unwrap_or(false);
         let weight = if is_negative || effective_negative { 0.0 } else { stat_weight(&slug, riven_type) };
-        ParsedStat { weight_label: weight_label(weight), slug, display_name, value, is_negative, effective_negative, weight }
+        ParsedStat { weight_label: weight_label(weight), slug, display_name, value, is_negative, is_multiplier, effective_negative, weight }
     }).collect();
 
     let positives: Vec<&ParsedStat> = stats.iter().filter(|s| !s.is_negative && !s.effective_negative).collect();
@@ -293,20 +296,25 @@ fn find_weapon(lines: &[String], weapons: &HashMap<String, WeaponInfo>) -> (Stri
 
 // ── Stat line parsing ─────────────────────────────────────────────────────────
 
-/// Parse OCR lines into (slug, display_name, value, is_negative, attr) tuples.
-/// Expected line format: "[+/-]NUMBER[%] Stat Name"
+/// Parse OCR lines into (slug, display_name, value, is_negative, is_multiplier, attr) tuples.
+/// Formats:
+///   "+NUMBER[%] Stat Name"   — positive percentage stat
+///   "-NUMBER[%] Stat Name"   — negative percentage stat
+///   "xNUMBER Stat Name"      — faction/damage-type multiplier (no %, keep raw value)
 fn parse_stat_lines(
     lines: &[String],
     attrs: &HashMap<String, AttributeInfo>,
-) -> Vec<(String, String, f32, bool, Option<AttributeInfo>)> {
+) -> Vec<(String, String, f32, bool, bool, Option<AttributeInfo>)> {
     let mut out = Vec::new();
 
     for line in lines {
         let t = line.trim();
-        let (is_negative, rest) = if t.starts_with('-') {
-            (true, &t[1..])
+        let (is_negative, is_multiplier, rest) = if t.starts_with('-') {
+            (true, false, &t[1..])
         } else if t.starts_with('+') {
-            (false, &t[1..])
+            (false, false, &t[1..])
+        } else if t.starts_with('x') || t.starts_with('X') {
+            (false, true, &t[1..])
         } else {
             continue;
         };
@@ -320,14 +328,22 @@ fn parse_stat_lines(
             Err(_) => continue,
         };
 
-        let name_part = rest[num_end..].trim_start_matches('%').trim();
+        // Multiplier lines have no '%' suffix; percentage lines may or may not.
+        let name_part = if is_multiplier {
+            rest[num_end..].trim()
+        } else {
+            rest[num_end..].trim_start_matches('%').trim()
+        };
         if name_part.is_empty() { continue; }
 
         let (slug, attr) = match_attribute(name_part, attrs);
         let display_name = attr.as_ref().map(|a| a.name.clone()).unwrap_or_else(|| name_part.to_string());
 
-        eprintln!("[riven] stat parse: {:?} → slug={slug:?} val={value} neg={is_negative}", name_part);
-        out.push((slug, display_name, value, is_negative, attr));
+        eprintln!(
+            "[riven] stat parse: {:?} → slug={slug:?} val={value} neg={is_negative} multiplier={is_multiplier}",
+            name_part
+        );
+        out.push((slug, display_name, value, is_negative, is_multiplier, attr));
     }
 
     out
@@ -348,6 +364,7 @@ fn match_attribute(name_ocr: &str, attrs: &HashMap<String, AttributeInfo>) -> (S
         }
     }
 
+    eprintln!("[riven] attr match: {:?} → {:?} (score {best_score:.3})", q, best_slug);
     if best_score >= 0.60 { (best_slug, best_attr) } else { (String::new(), None) }
 }
 

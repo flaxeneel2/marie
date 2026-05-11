@@ -21,6 +21,7 @@
     value: number;
     is_negative: boolean;
     effective_negative: boolean;
+    is_multiplier: boolean;
     weight: number;
     weight_label: string;
   }
@@ -59,6 +60,7 @@
   let rivenRolling = $state(false); // Kuva confirmed, waiting for server result
   let rivenError = $state('');
   let rivenData = $state<RivenRerollResult | null>(null);
+  let rivenCurrentGrade = $state<RivenRollGrade | null>(null); // Single-panel view on screen open
   let rivenDismissTimer: ReturnType<typeof setTimeout> | null = null;
 
   onMount(() => {
@@ -78,10 +80,17 @@
       listen('hide-overlay', () => hideOverlay()),
 
       // Riven listeners
-      // Screen opened: capture current stats as baseline — no overlay shown yet.
+      // Screen opened: capture current stats and show single-panel overlay.
       listen('riven-screen-open', async () => {
         rivenRolling = false;
-        try { await invoke('capture_current_riven'); } catch { /* game not running, ignore */ }
+        rivenData = null;
+        rivenCurrentGrade = null;
+        try {
+          rivenCurrentGrade = await invoke<RivenRollGrade>('capture_current_riven');
+          rivenVisible = true;
+          if (rivenDismissTimer) clearTimeout(rivenDismissTimer);
+          rivenDismissTimer = setTimeout(hideRivenOverlay, 30_000);
+        } catch { /* game not running, ignore */ }
       }),
       // Kuva confirmed — roll is in flight on the server.
       listen('riven-rolling', () => {
@@ -151,6 +160,7 @@
     if (rivenDismissTimer) clearTimeout(rivenDismissTimer);
     rivenError = '';
     rivenData = null;
+    rivenCurrentGrade = null;
     rivenLoading = true;
     rivenVisible = true;
 
@@ -167,6 +177,7 @@
 
   function hideRivenOverlay() {
     rivenVisible = false;
+    rivenCurrentGrade = null;
   }
 
   // ── Riven display helpers ────────────────────────────────────────────────────
@@ -264,6 +275,54 @@
       <div class="riven-status">Grading riven…</div>
     {:else if rivenError}
       <div class="riven-status riven-error">{rivenError}</div>
+    {:else if rivenCurrentGrade}
+      {@const grade = rivenCurrentGrade}
+      <div class="riven-compare">
+        <div class="riven-panel">
+          <div class="panel-label">CURRENT</div>
+          <div class="weapon-row">
+            <span class="weapon-name">{grade.weapon_name || '?'}</span>
+            <span class="tier-badge" style="color:{gradeColor(grade.weapon_tier)}">T{grade.weapon_tier}</span>
+          </div>
+          <div class="disp-row">
+            {#each { length: 5 } as _, di}
+              <span class="disp-dot" class:disp-filled={di < dispStars(grade.disposition)}>●</span>
+            {/each}
+            <span class="disp-label">{grade.disposition.toFixed(2)}</span>
+          </div>
+          <div class="stats-list">
+            {#each grade.stats as stat}
+              {@const isBad = stat.is_negative || stat.effective_negative}
+              <div class="stat-row" class:stat-bad={isBad}>
+                {#if !isBad}
+                  <span class="weight-dot" style="color:{weightColor(stat.weight_label)}" title={stat.weight_label}>◆</span>
+                {:else}
+                  <span class="weight-dot neg-dot">◆</span>
+                {/if}
+                {#if stat.is_multiplier}
+                  <span class="stat-sign">x</span>
+                  <span class="stat-val">{stat.value.toFixed(2)}</span>
+                {:else}
+                  <span class="stat-sign" class:neg-sign={isBad}>{isBad ? '−' : '+'}</span>
+                  <span class="stat-val">{stat.value.toFixed(1)}%</span>
+                {/if}
+                <span class="stat-name">{stat.display_name}</span>
+              </div>
+            {/each}
+          </div>
+          <div class="roll-count">Rolls: {grade.roll_count}</div>
+          <div class="grade-row">
+            <div class="grade-block">
+              <span class="grade-label">Build</span>
+              <span class="grade-letter" style="color:{gradeColor(grade.build_grade)}">{grade.build_grade}</span>
+            </div>
+            <div class="grade-block">
+              <span class="grade-label">Market</span>
+              <span class="grade-letter" style="color:{gradeColor(grade.market_grade)}">{grade.market_grade}</span>
+            </div>
+          </div>
+        </div>
+      </div>
     {:else if rivenData}
       <div class="riven-compare">
         {#each [{ roll: rivenData.old, label: 'CURRENT' }, { roll: rivenData.new, label: 'NEW' }] as side, si}
@@ -295,8 +354,13 @@
                   {:else}
                     <span class="weight-dot neg-dot">◆</span>
                   {/if}
-                  <span class="stat-sign" class:neg-sign={isBad}>{isBad ? '−' : '+'}</span>
-                  <span class="stat-val">{stat.value.toFixed(1)}%</span>
+                  {#if stat.is_multiplier}
+                    <span class="stat-sign">x</span>
+                    <span class="stat-val">{stat.value.toFixed(2)}</span>
+                  {:else}
+                    <span class="stat-sign" class:neg-sign={isBad}>{isBad ? '−' : '+'}</span>
+                    <span class="stat-val">{stat.value.toFixed(1)}%</span>
+                  {/if}
                   <span class="stat-name">{stat.display_name}</span>
                 </div>
               {/each}
