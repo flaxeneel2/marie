@@ -48,7 +48,7 @@ fn ocr_riven_panel(pixels: &[u8], width: u32, height: u32, idx: usize) -> Vec<St
     };
 
     save_ppm_rgba(pixels, width, height, &format!("/tmp/marie_riven{idx}_raw.ppm"));
-    let (rgb, w, h) = preprocess(pixels, width, height);
+    let (rgb, w, h) = preprocess_riven(pixels, width, height);
     save_ppm_rgb(&rgb, w, h, &format!("/tmp/marie_riven{idx}_proc.ppm"));
 
     let Some(source) = ImageSource::from_bytes(&rgb, (w, h)).ok() else { return vec![]; };
@@ -126,6 +126,28 @@ fn preprocess(pixels: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u32) {
     let w = width as usize;
     let h = height as usize;
     let rgb: Vec<u8> = pixels.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+    upscale3x_rgb(&rgb, w, h)
+}
+
+/// Riven-specific preprocessing: dark-background mod cards need inversion +
+/// binarization so OCR gets clean dark-on-white glyphs. The 1/7 confusion and
+/// phantom digits are caused by low-contrast gray-on-dark rendering.
+///
+/// Steps: strip alpha → grayscale → invert → threshold → upscale 3×.
+fn preprocess_riven(pixels: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u32) {
+    let w = width as usize;
+    let h = height as usize;
+
+    // Grayscale (luma), invert, then binarize at 128.
+    // After inversion: originally-bright text becomes dark, dark bg becomes white.
+    let gray_inv_bin: Vec<u8> = pixels.chunks(4).map(|p| {
+        let luma = (p[0] as u32 * 299 + p[1] as u32 * 587 + p[2] as u32 * 114) / 1000;
+        let inverted = 255 - luma as u8;
+        if inverted >= 128 { 0 } else { 255 }
+    }).collect();
+
+    // Expand grayscale to RGB (ocrs needs 3 channels).
+    let rgb: Vec<u8> = gray_inv_bin.iter().flat_map(|&v| [v, v, v]).collect();
     upscale3x_rgb(&rgb, w, h)
 }
 
