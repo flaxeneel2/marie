@@ -28,12 +28,11 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros"] 
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 once_cell = "1"
 strsim = "0.11"
-ocrs = "0.9"
-rten = "0.13"
+ocr-rs = "2.2.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(not(windows))'.dependencies]
 ashpd = { version = "0.9", default-features = false, features = ["tokio"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
 x11rb = { version = "0.13", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]

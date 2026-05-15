@@ -63,7 +63,7 @@ const RIVEN_CLOSE: &str = "DiegeticArtifactCards.lua: DBG: HudVis";
 const MISSION_START: &str = "ProjectionsCountdown.swf";
 
 // Network lag between the log line and the reward cards appearing on screen.
-const TRIGGER_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+const TRIGGER_DELAY: std::time::Duration = std::time::Duration::from_millis(1000);
 
 // Rolling window of recent log lines scanned when the trigger fires.
 const RECENT_LINE_BUFFER: usize = 200;

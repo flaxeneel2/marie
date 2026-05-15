@@ -3,7 +3,7 @@
 ## Overview
 
 ```
-focus check → N region captures → pixel inversion → ocrs inference → item name strings
+focus check → N region captures → pixel preprocessing → ocr-rs inference → item name strings
 ```
 
 `N` is the squad size (1–4), determined by `ee_log.rs` and passed through to the screenshot stage.
@@ -59,30 +59,32 @@ Works on wlroots compositors (Hyprland, Sway). Requires `grim` to be installed.
 
 ## OCR Engine (`ocr.rs`)
 
-Cross-platform pure-Rust OCR using [`ocrs`](https://github.com/robertknight/ocrs) (RTen neural-network inference). The same code path runs on all platforms.
+Cross-platform OCR using [`ocr-rs`](https://crates.io/crates/ocr-rs) — a Rust wrapper around PaddleOCR with MNN inference. The same code path runs on all platforms.
 
 ### Model loading
 
-Two `.rten` model files are downloaded at first build by `build.rs` (via `ureq`) into `src-tauri/models/` (gitignored), then embedded into the binary with `include_bytes!`:
+Three model files are downloaded at first build by `build.rs` (via `ureq`) into `src-tauri/models/` (gitignored), then embedded into the binary with `include_bytes!`:
 
 | File | Size | Role |
 |------|------|------|
-| `text-detection.rten` | ~5 MB | Locates text word bounding boxes |
-| `text-recognition.rten` | ~8 MB | Reads text from each located region |
+| `PP-OCRv5_mobile_det.mnn` | ~4.6 MB | Detects text region bounding boxes |
+| `en_PP-OCRv5_mobile_rec_infer.mnn` | ~3.8 MB | Recognises English text from cropped regions |
+| `ppocr_keys_en.txt` | ~1.4 KB | Character set index for the recognition model |
 
-Both models are loaded once at first use via `once_cell::Lazy<OcrEngine>` and reused for every subsequent call.
+Models are loaded once at first use via `once_cell::Lazy<OcrEngine>` and reused for every call.
+
+**Build requirement**: `bindgen` (used by `ocr-rs`) requires `libclang` at build time. In the Nix dev shell `LIBCLANG_PATH` is set automatically via `shellHook`.
 
 ### Pixel pipeline
 
 ```
 RGBA u8 pixels (from grim / screenshots crate)
-  → strip alpha channel, keep RGB triplets
-  → invert each channel: value = 255 − value
-       (Warframe UI is white-on-dark; ocrs trained on dark-on-light)
-  → ImageSource::from_bytes(&rgb, (w, h))
-  → OcrEngine::prepare_input
-  → detect_words → find_text_lines → recognize_text
-  → all non-empty TextLines joined with " "
+  → preprocess: strip alpha → RGB, upscale 3×
+      riven panels additionally: grayscale → invert → binarize (dark bg → white bg)
+  → image::DynamicImage::ImageRgba8
+  → OcrEngine::recognize(&img)
+      internally: PP-OCRv5 detect → crop text regions → PP-OCRv5 English rec
+  → Vec<OcrResult> text fields joined with " "
   → one String per card (empty string if no text detected)
 ```
 
@@ -90,4 +92,4 @@ All card strips are processed in parallel via `tokio::task::spawn_blocking` (one
 
 ### Accuracy notes
 
-Warframe's reward card text is high-contrast white-on-dark at a consistent size — a good fit for `ocrs`. Multi-line item names (e.g. "Vauban Prime / Chassis Blueprint" word-wrapped across two rows) are handled by joining all recognised lines. Jaro-Winkler + Jaccard fuzzy matching in `wfm.rs` (threshold 0.75) corrects residual OCR mis-reads.
+PP-OCRv5 with the English-specific recognition model improves accuracy over the previous `ocrs` models. Multi-line item names (e.g. "Vauban Prime / Chassis Blueprint" word-wrapped across two rows) are handled by joining all recognised text results. Jaro-Winkler + Jaccard fuzzy matching in `wfm.rs` (threshold 0.75) corrects residual OCR mis-reads.

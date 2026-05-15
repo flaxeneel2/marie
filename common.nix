@@ -23,8 +23,10 @@ let
     xorg.libxcb
     # gtk-layer-shell crate: wlr-layer-shell overlay surface
     gtk-layer-shell
-    # curl: used by build.rs to download ocrs models on first build
+    # curl: used by build.rs to download OCR models on first build
     curl
+    # ocr-rs bindgen needs libclang at build time
+    llvmPackages.libclang
   ];
 
   shellHook = ''
@@ -32,6 +34,7 @@ let
     # It causes crashes/weird behaviour otherwise
     export WEBKIT_DISABLE_DMABUF_RENDERER=1
     export XDG_DATA_DIRS="$GSETTINGS_SCHEMAS_PATH"
+    export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
   '';
 in
 {

@@ -1,14 +1,12 @@
 use std::{fs, io::Read, path::Path};
 
-const MODELS: &[(&str, &str)] = &[
-    (
-        "text-detection.rten",
-        "https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.rten",
-    ),
-    (
-        "text-recognition.rten",
-        "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.rten",
-    ),
+const MODEL_BASE: &str =
+    "https://github.com/zibo-chen/rust-paddle-ocr/raw/next/models";
+
+const MODELS: &[(&str, u64); 3] = &[
+    ("PP-OCRv5_mobile_det.mnn",         1024 * 1024),
+    ("en_PP-OCRv5_mobile_rec_infer.mnn", 1024 * 1024),
+    ("ppocr_keys_en.txt",               512),
 ];
 
 fn main() {
@@ -17,13 +15,15 @@ fn main() {
     let models_dir = Path::new("models");
     fs::create_dir_all(models_dir).expect("failed to create models/");
 
-    for (name, url) in MODELS {
+    for (name, min_size) in MODELS {
         let path = models_dir.join(name);
-        // Re-download if missing or suspiciously small (failed/partial download).
-        let too_small = fs::metadata(&path).map(|m| m.len() < 1024 * 100).unwrap_or(true);
+        let too_small = fs::metadata(&path)
+            .map(|m| m.len() < *min_size)
+            .unwrap_or(true);
         if too_small {
             println!("cargo:warning=Downloading OCR model: {name}");
-            download(url, &path);
+            let url = format!("{MODEL_BASE}/{name}");
+            download(&url, &path);
         }
     }
 }
