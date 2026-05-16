@@ -35,6 +35,7 @@ let
     export WEBKIT_DISABLE_DMABUF_RENDERER=1
     export XDG_DATA_DIRS="$GSETTINGS_SCHEMAS_PATH"
     export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
+    echo "LIBCLANG_PATH set to $LIBCLANG_PATH"
   '';
 in
 {
