@@ -94,6 +94,8 @@ pub struct ParsedStat {
     pub is_multiplier: bool,
     pub weight: f32,
     pub weight_label: String,
+    /// value / theoretical_max clamped 0–1. None when base value for this stat is unknown.
+    pub roll_quality: Option<f32>,
 }
 
 #[derive(Serialize, Clone)]
@@ -199,9 +201,9 @@ pub fn fake_reroll_result() -> RivenRerollResult {
         disposition: 0.5,
         weapon_tier: "S".into(),
         stats: vec![
-            ParsedStat { slug: "fire_rate".into(),   display_name: "Fire Rate".into(),   value: 62.3, is_negative: false, is_multiplier: false, effective_negative: false, weight: 0.75, weight_label: "Great".into() },
-            ParsedStat { slug: "reload_speed".into(), display_name: "Reload Speed".into(), value: 48.7, is_negative: false, is_multiplier: false, effective_negative: false, weight: 0.5,  weight_label: "Good".into()  },
-            ParsedStat { slug: "damage".into(),      display_name: "Damage".into(),      value: 54.1, is_negative: true,  is_multiplier: false, effective_negative: false, weight: 0.0,  weight_label: "Dump".into()  },
+            ParsedStat { slug: "fire_rate".into(),    display_name: "Fire Rate".into(),    value: 62.3, is_negative: false, is_multiplier: false, effective_negative: false, weight: 0.75, weight_label: "Great".into(), roll_quality: Some(0.72) },
+            ParsedStat { slug: "reload_speed".into(), display_name: "Reload Speed".into(), value: 48.7, is_negative: false, is_multiplier: false, effective_negative: false, weight: 0.5,  weight_label: "Good".into(),  roll_quality: Some(0.45) },
+            ParsedStat { slug: "damage".into(),       display_name: "Damage".into(),       value: 54.1, is_negative: true,  is_multiplier: false, effective_negative: false, weight: 0.0,  weight_label: "Dump".into(),  roll_quality: None        },
         ],
         roll_count: 10,
         build_score: 0.38,
@@ -215,9 +217,9 @@ pub fn fake_reroll_result() -> RivenRerollResult {
         disposition: 0.5,
         weapon_tier: "S".into(),
         stats: vec![
-            ParsedStat { slug: "critical_chance".into(), display_name: "Critical Chance".into(), value: 77.3, is_negative: false, is_multiplier: false, effective_negative: false, weight: 1.0,  weight_label: "God".into()   },
-            ParsedStat { slug: "multishot".into(),        display_name: "Multishot".into(),        value: 88.1, is_negative: false, is_multiplier: false, effective_negative: false, weight: 1.0,  weight_label: "God".into()   },
-            ParsedStat { slug: "zoom".into(),             display_name: "Zoom".into(),             value: 34.6, is_negative: true,  is_multiplier: false, effective_negative: false, weight: 0.0,  weight_label: "Dump".into()  },
+            ParsedStat { slug: "critical_chance".into(), display_name: "Critical Chance".into(), value: 77.3, is_negative: false, is_multiplier: false, effective_negative: false, weight: 1.0,  weight_label: "God".into(),  roll_quality: Some(0.91) },
+            ParsedStat { slug: "multishot".into(),        display_name: "Multishot".into(),        value: 88.1, is_negative: false, is_multiplier: false, effective_negative: false, weight: 1.0,  weight_label: "God".into(),  roll_quality: Some(0.58) },
+            ParsedStat { slug: "zoom".into(),             display_name: "Zoom".into(),             value: 34.6, is_negative: true,  is_multiplier: false, effective_negative: false, weight: 0.0,  weight_label: "Dump".into(), roll_quality: None        },
         ],
         roll_count: 11,
         build_score: 1.0,
@@ -238,13 +240,34 @@ fn build_grade(
     attrs: &HashMap<String, AttributeInfo>,
 ) -> RivenRollGrade {
     let riven_type = weapon.as_ref().map(|w| w.riven_type.as_str()).unwrap_or("rifle");
+    let disposition = weapon.as_ref().map(|w| w.disposition).unwrap_or(1.0);
     let roll_count = parse_roll_count(&lines);
 
     let raw = parse_stat_lines(&lines, attrs);
+
+    // Pre-scan to determine slot configuration for roll_quality computation.
+    let n_positive = raw.iter().filter(|(_, _, _, is_neg, _, attr)| {
+        let eff = attr.as_ref().map(|a| a.positive_is_negative && !*is_neg).unwrap_or(false);
+        !*is_neg && !eff
+    }).count();
+    let has_negative = raw.iter().any(|(_, _, _, is_neg, _, attr)| {
+        let eff = attr.as_ref().map(|a| a.positive_is_negative && !*is_neg).unwrap_or(false);
+        *is_neg || eff
+    });
+    let s_factor = slot_factor(n_positive, has_negative);
+
     let stats: Vec<ParsedStat> = raw.into_iter().map(|(slug, display_name, value, is_negative, is_multiplier, attr)| {
         let effective_negative = attr.as_ref().map(|a| a.positive_is_negative && !is_negative).unwrap_or(false);
         let weight = if is_negative || effective_negative { 0.0 } else { stat_weight(&slug, riven_type) };
-        ParsedStat { weight_label: weight_label(weight), slug, display_name, value, is_negative, is_multiplier, effective_negative, weight }
+        let roll_quality = if !is_negative && !effective_negative && !is_multiplier {
+            base_stat_value(&slug).map(|base| {
+                let max_val = base * disposition * s_factor;
+                if max_val > 0.0 { (value / max_val).clamp(0.0, 1.0) } else { 0.0 }
+            })
+        } else {
+            None
+        };
+        ParsedStat { roll_quality, weight_label: weight_label(weight), slug, display_name, value, is_negative, is_multiplier, effective_negative, weight }
     }).collect();
 
     let positives: Vec<&ParsedStat> = stats.iter().filter(|s| !s.is_negative && !s.effective_negative).collect();
@@ -421,6 +444,57 @@ fn weight_label(w: f32) -> String {
         x if x > 0.0   => "Filler",
         _ => "Dump",
     }.to_string()
+}
+
+// ── Roll quality ──────────────────────────────────────────────────────────────
+
+/// Theoretical max % value at disposition 1.0 with 3P+1N (the community reference config).
+/// Returns None for stats that don't roll as a simple percentage (e.g. punch_through, multipliers).
+fn base_stat_value(slug: &str) -> Option<f32> {
+    Some(match slug {
+        "damage"                  => 99.0,
+        "critical_chance"         => 66.0,
+        "critical_damage"         => 99.0,
+        "multishot"               => 99.0,
+        "fire_rate"               => 60.0,
+        "status_chance"           => 60.0,
+        "reload_speed"            => 40.0,
+        "heat_damage"             => 90.0,
+        "cold_damage"             => 90.0,
+        "electric_damage"         => 90.0,
+        "toxin_damage"            => 90.0,
+        "radiation_damage"        => 90.0,
+        "magnetic_damage"         => 90.0,
+        "viral_damage"            => 90.0,
+        "corrosive_damage"        => 90.0,
+        "blast_damage"            => 90.0,
+        "gas_damage"              => 90.0,
+        "magazine_capacity"       => 40.0,
+        "ammo_maximum"            => 40.0,
+        "attack_speed"            => 55.0,
+        "range"                   => 40.0,
+        "combo_duration"          => 40.0,
+        "heavy_attack_efficiency" => 40.0,
+        "slide_attack"            => 90.0,
+        "finisher_damage"         => 60.0,
+        "channeling_efficiency"   => 40.0,
+        "status_duration"         => 40.0,
+        "flight_speed"            => 60.0,
+        "zoom"                    => 44.0,
+        _ => return None,
+    })
+}
+
+/// Multiplier on top of base × disposition for different slot configurations.
+/// Reference (1.0) = 3 positives + 1 negative.
+fn slot_factor(n_positive: usize, has_negative: bool) -> f32 {
+    match (n_positive, has_negative) {
+        (2, false) => 1.00,
+        (2, true)  => 1.25,
+        (3, false) => 0.75,
+        (3, true)  => 1.00,
+        _          => 1.00,
+    }
 }
 
 // ── Stat weight tables ────────────────────────────────────────────────────────

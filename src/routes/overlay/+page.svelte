@@ -24,6 +24,7 @@
     is_multiplier: boolean;
     weight: number;
     weight_label: string;
+    roll_quality: number | null;
   }
 
   interface RivenRollGrade {
@@ -198,6 +199,10 @@
     return ({ God: '#c9a227', Great: '#7ec8a0', Good: '#5bc0be', Filler: '#666', Dump: '#444' })[label] ?? '#666';
   }
 
+  function weightLetter(label: string): string {
+    return ({ God: 'S', Great: 'A', Good: 'B', Filler: 'C', Dump: 'D' })[label] ?? '?';
+  }
+
   function statImproved(oldStat: ParsedStat | undefined, newStat: ParsedStat): boolean {
     if (!oldStat) return false;
     return newStat.weight > oldStat.weight;
@@ -267,123 +272,96 @@
   </div>
 {/if}
 
+{#snippet rivenPanel(grade: RivenRollGrade, label: string, isNew: boolean, oldGrade: RivenRollGrade | null)}
+  <div class="riven-panel" class:new-panel={isNew}>
+    <div class="panel-label">{label}</div>
+
+    <div class="weapon-header">
+      <span class="weapon-name">{grade.weapon_name || '?'}</span>
+      <span class="tier-badge" style="color:{gradeColor(grade.weapon_tier)}">T{grade.weapon_tier}</span>
+    </div>
+
+    <div class="disp-row">
+      {#each { length: 5 } as _, di}
+        <span class="disp-dot" class:disp-filled={di < dispStars(grade.disposition)}>●</span>
+      {/each}
+      <span class="disp-label">Disp {grade.disposition.toFixed(2)}</span>
+    </div>
+
+    <div class="stats-section">
+      {#each grade.stats as stat}
+        {@const isBad = stat.is_negative || stat.effective_negative}
+        {@const oldStat = oldGrade ? findMatchingStat(stat.slug, oldGrade.stats) : undefined}
+        {@const improved = oldStat != null && stat.weight > oldStat.weight}
+        <div class="stat-entry" class:stat-bad={isBad} class:stat-improved={improved}>
+          <div class="stat-main-row">
+            <span class="weight-pip" style="color:{isBad ? '#3a3a3a' : weightColor(stat.weight_label)}">◆</span>
+            <span class="stat-sign" class:neg-sign={isBad}>{isBad ? '−' : stat.is_multiplier ? 'x' : '+'}</span>
+            <span class="stat-val">{stat.is_multiplier ? stat.value.toFixed(2) : stat.value.toFixed(1) + '%'}</span>
+            <span class="stat-name">{stat.display_name}</span>
+            {#if !isBad}
+              <span class="weight-tier" style="color:{weightColor(stat.weight_label)}">{weightLetter(stat.weight_label)}</span>
+            {:else}
+              <span class="weight-tier neg-tier">−</span>
+            {/if}
+          </div>
+          {#if !isBad && stat.roll_quality != null}
+            <div class="stat-bar-track">
+              <div
+                class="stat-bar-fill"
+                style="width:{Math.round(stat.roll_quality * 100)}%; background:{weightColor(stat.weight_label)}"
+              ></div>
+            </div>
+          {:else if !isBad}
+            <div class="stat-bar-track stat-bar-unknown"></div>
+          {/if}
+        </div>
+      {/each}
+    </div>
+
+    <div class="scores-section">
+      {#each [
+        { label: 'Build',  score: grade.build_score,  g: grade.build_grade  },
+        { label: 'Market', score: grade.market_score, g: grade.market_grade },
+      ] as row}
+        <div class="score-row">
+          <span class="score-label">{row.label}</span>
+          <div class="score-bar-track">
+            <div class="score-bar-fill" style="width:{Math.round(row.score * 100)}%; background:{gradeColor(row.g)}"></div>
+          </div>
+          <span class="score-pct">{Math.round(row.score * 100)}%</span>
+          <span class="score-grade-letter" style="color:{gradeColor(row.g)}">{row.g}</span>
+        </div>
+      {/each}
+    </div>
+
+    <div class="roll-footer">
+      <span class="roll-count-text">{grade.roll_count} roll{grade.roll_count === 1 ? '' : 's'}</span>
+      {#if grade.roll_count > 5}
+        <span class="roll-penalty">−{Math.min(15, grade.roll_count - 5)}% mkt</span>
+      {/if}
+    </div>
+  </div>
+{/snippet}
+
 {#if rivenVisible}
   <div class="riven-overlay">
     {#if rivenRolling}
-      <div class="riven-status riven-rolling">Rolling…</div>
+      <div class="riven-status riven-rolling">Rolling riven…</div>
     {:else if rivenLoading}
       <div class="riven-status">Grading riven…</div>
     {:else if rivenError}
       <div class="riven-status riven-error">{rivenError}</div>
     {:else if rivenCurrentGrade}
-      {@const grade = rivenCurrentGrade}
-      <div class="riven-compare">
-        <div class="riven-panel">
-          <div class="panel-label">CURRENT</div>
-          <div class="weapon-row">
-            <span class="weapon-name">{grade.weapon_name || '?'}</span>
-            <span class="tier-badge" style="color:{gradeColor(grade.weapon_tier)}">T{grade.weapon_tier}</span>
-          </div>
-          <div class="disp-row">
-            {#each { length: 5 } as _, di}
-              <span class="disp-dot" class:disp-filled={di < dispStars(grade.disposition)}>●</span>
-            {/each}
-            <span class="disp-label">{grade.disposition.toFixed(2)}</span>
-          </div>
-          <div class="stats-list">
-            {#each grade.stats as stat}
-              {@const isBad = stat.is_negative || stat.effective_negative}
-              <div class="stat-row" class:stat-bad={isBad}>
-                {#if !isBad}
-                  <span class="weight-dot" style="color:{weightColor(stat.weight_label)}" title={stat.weight_label}>◆</span>
-                {:else}
-                  <span class="weight-dot neg-dot">◆</span>
-                {/if}
-                {#if stat.is_multiplier}
-                  <span class="stat-sign">x</span>
-                  <span class="stat-val">{stat.value.toFixed(2)}</span>
-                {:else}
-                  <span class="stat-sign" class:neg-sign={isBad}>{isBad ? '−' : '+'}</span>
-                  <span class="stat-val">{stat.value.toFixed(1)}%</span>
-                {/if}
-                <span class="stat-name">{stat.display_name}</span>
-              </div>
-            {/each}
-          </div>
-          <div class="roll-count">Rolls: {grade.roll_count}</div>
-          <div class="grade-row">
-            <div class="grade-block">
-              <span class="grade-label">Build</span>
-              <span class="grade-letter" style="color:{gradeColor(grade.build_grade)}">{grade.build_grade}</span>
-            </div>
-            <div class="grade-block">
-              <span class="grade-label">Market</span>
-              <span class="grade-letter" style="color:{gradeColor(grade.market_grade)}">{grade.market_grade}</span>
-            </div>
-          </div>
-        </div>
+      <div class="riven-side riven-side-left">
+        {@render rivenPanel(rivenCurrentGrade, 'CURRENT', false, null)}
       </div>
     {:else if rivenData}
-      <div class="riven-compare">
-        {#each [{ roll: rivenData.old, label: 'CURRENT' }, { roll: rivenData.new, label: 'NEW' }] as side, si}
-          <div class="riven-panel" class:new-panel={si === 1}>
-            <div class="panel-label">{side.label}</div>
-
-            <div class="weapon-row">
-              <span class="weapon-name">{side.roll.weapon_name || '?'}</span>
-              <span class="tier-badge" style="color:{gradeColor(side.roll.weapon_tier)}">
-                T{side.roll.weapon_tier}
-              </span>
-            </div>
-
-            <div class="disp-row">
-              {#each { length: 5 } as _, di}
-                <span class="disp-dot" class:disp-filled={di < dispStars(side.roll.disposition)}>●</span>
-              {/each}
-              <span class="disp-label">{side.roll.disposition.toFixed(2)}</span>
-            </div>
-
-            <div class="stats-list">
-              {#each side.roll.stats as stat}
-                {@const isBad = stat.is_negative || stat.effective_negative}
-                {@const matchInOther = si === 1 ? findMatchingStat(stat.slug, rivenData!.old.stats) : undefined}
-                {@const improved = si === 1 && matchInOther ? stat.weight > matchInOther.weight : false}
-                <div class="stat-row" class:stat-bad={isBad} class:stat-improved={improved}>
-                  {#if !isBad}
-                    <span class="weight-dot" style="color:{weightColor(stat.weight_label)}" title={stat.weight_label}>◆</span>
-                  {:else}
-                    <span class="weight-dot neg-dot">◆</span>
-                  {/if}
-                  {#if stat.is_multiplier}
-                    <span class="stat-sign">x</span>
-                    <span class="stat-val">{stat.value.toFixed(2)}</span>
-                  {:else}
-                    <span class="stat-sign" class:neg-sign={isBad}>{isBad ? '−' : '+'}</span>
-                    <span class="stat-val">{stat.value.toFixed(1)}%</span>
-                  {/if}
-                  <span class="stat-name">{stat.display_name}</span>
-                </div>
-              {/each}
-            </div>
-
-            <div class="roll-count">Rolls: {side.roll.roll_count}</div>
-
-            <div class="grade-row">
-              <div class="grade-block">
-                <span class="grade-label">Build</span>
-                <span class="grade-letter" style="color:{gradeColor(side.roll.build_grade)}">{side.roll.build_grade}</span>
-              </div>
-              <div class="grade-block">
-                <span class="grade-label">Market</span>
-                <span class="grade-letter" style="color:{gradeColor(side.roll.market_grade)}">{side.roll.market_grade}</span>
-              </div>
-            </div>
-          </div>
-
-          {#if si === 0}
-            <div class="compare-arrow">→</div>
-          {/if}
-        {/each}
+      <div class="riven-side riven-side-left">
+        {@render rivenPanel(rivenData.old, 'CURRENT', false, null)}
+      </div>
+      <div class="riven-side riven-side-right">
+        {@render rivenPanel(rivenData.new, 'NEW', true, rivenData.old)}
       </div>
     {/if}
   </div>
@@ -462,14 +440,16 @@
 
   .riven-overlay {
     position: fixed;
-    top: 18px;
-    left: 50%;
-    transform: translateX(-50%);
+    inset: 0;
     z-index: 10;
     pointer-events: none;
   }
 
   .riven-status {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     background: rgba(10, 12, 20, 0.88);
     color: #e0e0e0;
     padding: 8px 18px;
@@ -482,55 +462,51 @@
   .riven-error   { color: #ff6b6b; }
   .riven-rolling { color: #c9a227; }
 
-  .riven-compare {
-    display: flex;
-    align-items: flex-start;
-    gap: 0;
+  .riven-side {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
   }
 
+  .riven-side-left  { left: 20px; }
+  .riven-side-right { right: 20px; }
+
   .riven-panel {
-    background: rgba(10, 12, 20, 0.92);
+    background: rgba(10, 12, 20, 0.94);
     border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 8px;
-    padding: 12px 16px;
-    min-width: 220px;
-    max-width: 260px;
+    border-radius: 10px;
+    padding: 14px 16px;
+    width: 268px;
     font-family: 'Segoe UI', Arial, sans-serif;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
   }
 
   .new-panel {
-    border-color: rgba(201, 162, 39, 0.35);
-  }
-
-  .compare-arrow {
-    align-self: center;
-    color: #555;
-    font-size: 20px;
-    padding: 0 8px;
-    user-select: none;
+    border-color: rgba(201, 162, 39, 0.4);
+    box-shadow: 0 0 14px rgba(201, 162, 39, 0.07);
   }
 
   .panel-label {
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 700;
-    letter-spacing: 0.12em;
-    color: #666;
+    letter-spacing: 0.14em;
+    color: #484848;
     text-transform: uppercase;
   }
 
-  .weapon-row {
+  .weapon-header {
     display: flex;
     align-items: baseline;
     gap: 8px;
   }
 
   .weapon-name {
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 700;
-    color: #e8e8e8;
+    color: #eee;
+    flex: 1;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -551,7 +527,7 @@
 
   .disp-dot {
     font-size: 10px;
-    color: #333;
+    color: #252525;
   }
 
   .disp-dot.disp-filled {
@@ -560,42 +536,49 @@
 
   .disp-label {
     font-size: 10px;
-    color: #555;
-    margin-left: 4px;
+    color: #4a4a4a;
+    margin-left: 5px;
   }
 
-  .stats-list {
+  /* ── Stats ── */
+
+  .stats-section {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 7px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    padding: 8px 0;
   }
 
-  .stat-row {
+  .stat-entry {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .stat-entry.stat-bad { opacity: 0.55; }
+
+  .stat-entry.stat-improved {
+    background: rgba(126, 200, 160, 0.07);
+    border-radius: 4px;
+    padding: 3px 5px;
+    margin: -3px -5px;
+  }
+
+  .stat-main-row {
     display: flex;
     align-items: center;
     gap: 5px;
     font-size: 12px;
   }
 
-  .stat-row.stat-bad {
-    opacity: 0.65;
-  }
-
-  .stat-row.stat-improved {
-    background: rgba(126, 200, 160, 0.08);
-    border-radius: 3px;
-    padding: 1px 3px;
-    margin: -1px -3px;
-  }
-
-  .weight-dot {
+  .weight-pip {
     font-size: 8px;
     flex-shrink: 0;
     width: 10px;
     text-align: center;
   }
-
-  .neg-dot { color: #333; }
 
   .stat-sign {
     font-weight: 700;
@@ -608,49 +591,127 @@
   .neg-sign { color: #ff6b6b; }
 
   .stat-val {
-    color: #ccc;
-    min-width: 42px;
+    color: #ddd;
+    min-width: 46px;
     text-align: right;
     flex-shrink: 0;
+    font-weight: 600;
   }
 
   .stat-name {
-    color: #aaa;
+    color: #999;
+    flex: 1;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .roll-count {
-    font-size: 11px;
-    color: #555;
-  }
-
-  .grade-row {
-    display: flex;
-    gap: 12px;
-    padding-top: 4px;
-    border-top: 1px solid rgba(255,255,255,0.06);
-  }
-
-  .grade-block {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 2px;
-  }
-
-  .grade-label {
+  .weight-tier {
     font-size: 9px;
-    font-weight: 600;
-    letter-spacing: 0.1em;
-    color: #555;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    flex-shrink: 0;
     text-transform: uppercase;
   }
 
-  .grade-letter {
-    font-size: 22px;
+  .neg-tier { color: #383838; }
+
+  .stat-bar-track {
+    height: 3px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-left: 15px;
+  }
+
+  .stat-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    opacity: 0.7;
+    transition: width 0.25s ease;
+  }
+
+  .stat-bar-unknown {
+    background: repeating-linear-gradient(
+      90deg,
+      rgba(255,255,255,0.04) 0px,
+      rgba(255,255,255,0.04) 4px,
+      transparent 4px,
+      transparent 8px
+    );
+  }
+
+  /* ── Scores ── */
+
+  .scores-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .score-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .score-label {
+    font-size: 9px;
+    color: #484848;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    width: 38px;
+    flex-shrink: 0;
+  }
+
+  .score-bar-track {
+    flex: 1;
+    height: 5px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .score-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    opacity: 0.75;
+    transition: width 0.25s ease;
+  }
+
+  .score-pct {
+    font-size: 11px;
+    color: #666;
+    width: 32px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .score-grade-letter {
+    font-size: 18px;
     font-weight: 900;
+    width: 14px;
+    flex-shrink: 0;
     line-height: 1;
+  }
+
+  /* ── Footer ── */
+
+  .roll-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .roll-count-text {
+    font-size: 10px;
+    color: #404040;
+  }
+
+  .roll-penalty {
+    font-size: 10px;
+    color: #ff6b6b;
+    opacity: 0.65;
   }
 </style>
