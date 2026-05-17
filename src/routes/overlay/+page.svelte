@@ -45,6 +45,10 @@
     new: RivenRollGrade;
   }
 
+  // ── Interactive mode ─────────────────────────────────────────────────────────
+
+  let overlayInteractive = $state(false);
+
   // ── Relic state ──────────────────────────────────────────────────────────────
 
   let items = $state<ItemPriceResult[]>([]);
@@ -68,6 +72,11 @@
     const cleanups: Array<() => void> = [];
 
     Promise.all([
+      // Interactive mode listener
+      listen<boolean>('overlay-interactive-changed', (event) => {
+        overlayInteractive = event.payload;
+      }),
+
       // Relic listeners
       listen<number>('relic-trigger', async (event) => {
         playerCount = event.payload;
@@ -144,6 +153,7 @@
 
   function hideOverlay() {
     visible = false;
+    if (overlayInteractive) invoke('disable_overlay_interaction');
   }
 
   // ── Riven overlay logic ──────────────────────────────────────────────────────
@@ -179,6 +189,7 @@
   function hideRivenOverlay() {
     rivenVisible = false;
     rivenCurrentGrade = null;
+    if (overlayInteractive) invoke('disable_overlay_interaction');
   }
 
   // ── Riven display helpers ────────────────────────────────────────────────────
@@ -245,6 +256,13 @@
     return `left:${leftCss.toFixed(1)}px; width:${widthCss.toFixed(1)}px; top:${topCss.toFixed(1)}px`;
   }
 </script>
+
+{#if overlayInteractive}
+  <div class="interactive-badge">
+    <span class="interactive-label">INTERACTIVE</span>
+    <button class="interactive-close" onclick={() => invoke('disable_overlay_interaction')}>×</button>
+  </div>
+{/if}
 
 {#if visible}
   <div class="overlay">
@@ -368,6 +386,53 @@
 {/if}
 
 <style>
+  .interactive-badge {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(15, 17, 23, 0.92);
+    border: 1px solid #c9a227;
+    border-radius: 20px;
+    padding: 6px 12px 6px 14px;
+    pointer-events: auto;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+  }
+
+  .interactive-label {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: #c9a227;
+    text-transform: uppercase;
+  }
+
+  .interactive-close {
+    background: none;
+    border: 1px solid #3a3d4a;
+    border-radius: 50%;
+    color: #888;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: border-color 0.15s, color 0.15s;
+  }
+
+  .interactive-close:hover {
+    border-color: #c9a227;
+    color: #c9a227;
+  }
+
   :global(html, body) {
     margin: 0;
     padding: 0;
@@ -381,6 +446,7 @@
     inset: 0;
     /*background-color: rgba(255,255,255,0.05);*/
     font-family: 'Segoe UI', Arial, sans-serif;
+    pointer-events: none; /* transparent container; cards opt back in */
   }
 
   .status-message {
@@ -409,6 +475,9 @@
     flex-direction: column;
     gap: 6px;
     transition: border-color 0.2s;
+    pointer-events: auto;
+    user-select: text;
+    cursor: default;
   }
 
   .card.highlight {
@@ -442,7 +511,17 @@
     position: fixed;
     inset: 0;
     z-index: 10;
-    pointer-events: none;
+    pointer-events: none; /* transparent container; children opt back in below */
+  }
+
+  /* Allow content panels to receive pointer events when GTK lets them through. */
+  .riven-side {
+    pointer-events: auto;
+  }
+
+  .riven-panel {
+    user-select: text;
+    cursor: default;
   }
 
   .riven-status {

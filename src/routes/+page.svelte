@@ -9,8 +9,64 @@
   let overrideEnabled = $state(false);
   let playerCount = $state(4);
 
+  // ── Keybind settings ─────────────────────────────────────────────────────────
+  let shortcutInput = $state('Ctrl+Shift+I');
+  let recordingShortcut = $state(false);
+  let shortcutSaved = $state(false);
+  let shortcutError = $state('');
+
+  function codeToKeyName(code: string): string | null {
+    if (code.startsWith('Key')) return code.slice(3);       // KeyA → A
+    if (code.startsWith('Digit')) return code.slice(5);     // Digit1 → 1
+    if (/^F\d+$/.test(code)) return code;                   // F1, F2, …
+    const map: Record<string, string> = {
+      Semicolon: ';', Equal: '=', Minus: '-', Period: '.', Comma: ',',
+      Slash: '/', Backslash: '\\', BracketLeft: '[', BracketRight: ']',
+      Quote: "'", Backquote: '`', Space: 'Space', Enter: 'Enter',
+      Backspace: 'Backspace', Delete: 'Delete', Escape: 'Escape', Tab: 'Tab',
+      ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+      Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+    };
+    return map[code] ?? null;
+  }
+
+  function startRecording(e: MouseEvent) {
+    recordingShortcut = true;
+    shortcutError = '';
+    (e.currentTarget as HTMLElement).focus();
+  }
+
+  function handleKeybindKeyDown(e: KeyboardEvent) {
+    if (!recordingShortcut) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
+    const keyName = codeToKeyName(e.code);
+    if (!keyName) return;
+    const parts: string[] = [];
+    if (e.ctrlKey)  parts.push('Ctrl');
+    if (e.altKey)   parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.metaKey)  parts.push('Super');
+    parts.push(keyName);
+    shortcutInput = parts.join('+');
+    recordingShortcut = false;
+  }
+
+  async function saveShortcut() {
+    shortcutError = '';
+    try {
+      await invoke('set_interaction_shortcut', { shortcut: shortcutInput });
+      shortcutSaved = true;
+      setTimeout(() => (shortcutSaved = false), 2000);
+    } catch (e) {
+      shortcutError = String(e);
+    }
+  }
+
   onMount(() => {
     invoke<string>('ee_log_path').then(p => (logPath = p));
+    invoke<string>('get_interaction_shortcut').then(s => (shortcutInput = s));
 
     // Mirror the overlay's trigger listener so the readout stays in sync
     // with whatever the EE.log watcher detects.
@@ -106,6 +162,37 @@
     <p>Send a test trigger to exercise the OCR + grading pipeline on the real game screen:</p>
     <button onclick={testRivenTrigger}>Send test trigger</button>
     <button class="secondary" onclick={testRivenOverlay}>Test overlay (fake data)</button>
+  </section>
+
+  <section>
+    <h2>Settings</h2>
+    <dl>
+      <dt>Overlay hotkey</dt>
+      <dd>
+        <p class="hint">Press this combination to toggle the overlay between click-through and interactive mode.</p>
+        <div class="keybind-row">
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <div
+            class="keybind-input"
+            class:recording={recordingShortcut}
+            tabindex="0"
+            role="button"
+            onclick={startRecording}
+            onkeydown={handleKeybindKeyDown}
+            onblur={() => (recordingShortcut = false)}
+          >
+            {recordingShortcut ? 'Press keys…' : shortcutInput}
+          </div>
+          <button onclick={saveShortcut}>Save</button>
+        </div>
+        {#if shortcutSaved}
+          <p class="status">Saved!</p>
+        {:else if shortcutError}
+          <p class="status error">{shortcutError}</p>
+        {/if}
+        <p class="hint">Click the box then press your key combination. Note: on Linux/Wayland this requires being in the <code>input</code> group (<code>sudo usermod -aG input $USER</code>).</p>
+      </dd>
+    </dl>
   </section>
 </main>
 
@@ -281,9 +368,67 @@
     color: #7ec8a0;
   }
 
+  .status.error {
+    color: #ff6b6b;
+  }
+
   p {
     margin: 0 0 12px;
     font-size: 13px;
     color: #bbb;
+  }
+
+  .hint {
+    color: #666;
+    font-size: 12px;
+    margin: 4px 0 8px;
+  }
+
+  .keybind-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .keybind-input {
+    flex: 1;
+    background: #0f1117;
+    border: 1px solid #3a3d4a;
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-size: 13px;
+    font-family: 'Consolas', 'Courier New', monospace;
+    color: #ccc;
+    cursor: pointer;
+    user-select: none;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .keybind-input:focus,
+  .keybind-input:hover {
+    border-color: #c9a227;
+  }
+
+  .keybind-input.recording {
+    border-color: #c9a227;
+    color: #c9a227;
+    animation: pulse 1s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.6; }
+  }
+
+  code {
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 11px;
+    background: #0f1117;
+    border: 1px solid #2a2d3a;
+    border-radius: 3px;
+    padding: 1px 4px;
+    color: #aaa;
   }
 </style>

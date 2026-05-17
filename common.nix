@@ -27,6 +27,8 @@ let
     curl
     # ocr-rs bindgen needs libclang at build time
     llvmPackages.libclang
+    # rdev evdev-rs feature: raw kernel input events (global hotkey on Wayland)
+    libevdev
   ];
 
   shellHook = ''

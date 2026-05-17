@@ -6,6 +6,7 @@ mod warframe_window;
 mod wfm;
 
 use once_cell::sync::Lazy;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 use wfm::ItemPriceResult;
@@ -14,7 +15,225 @@ use wfm::ItemPriceResult;
 // snapshot — the fresh OCR result is stored here for the next roll to use as old.
 static CURRENT_RIVEN_LINES: Lazy<Mutex<Option<Vec<String>>>> = Lazy::new(|| Mutex::new(None));
 
+// ── Overlay interaction toggle ────────────────────────────────────────────────
+
+static OVERLAY_INTERACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Parsed representation of a keyboard shortcut for use in the rdev listener.
+#[derive(Clone)]
+struct ParsedShortcut {
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    super_: bool,
+    key: rdev::Key,
+}
+
+struct ShortcutState {
+    raw: String,
+    parsed: Option<ParsedShortcut>,
+}
+
+static SHORTCUT: Lazy<std::sync::Mutex<ShortcutState>> = Lazy::new(|| {
+    let default = "Ctrl+Shift+I".to_string();
+    let parsed = parse_shortcut(&default);
+    std::sync::Mutex::new(ShortcutState { raw: default, parsed })
+});
+
+fn parse_shortcut(s: &str) -> Option<ParsedShortcut> {
+    let mut ctrl = false;
+    let mut alt = false;
+    let mut shift = false;
+    let mut super_ = false;
+    let mut key: Option<rdev::Key> = None;
+
+    for part in s.split('+') {
+        match part.trim() {
+            "Ctrl"  => ctrl  = true,
+            "Alt"   => alt   = true,
+            "Shift" => shift  = true,
+            "Super" => super_ = true,
+            k       => key = Some(parse_key_name(k)?),
+        }
+    }
+
+    Some(ParsedShortcut { ctrl, alt, shift, super_, key: key? })
+}
+
+fn parse_key_name(s: &str) -> Option<rdev::Key> {
+    use rdev::Key::*;
+    Some(match s {
+        "A" => KeyA, "B" => KeyB, "C" => KeyC, "D" => KeyD, "E" => KeyE,
+        "F" => KeyF, "G" => KeyG, "H" => KeyH, "I" => KeyI, "J" => KeyJ,
+        "K" => KeyK, "L" => KeyL, "M" => KeyM, "N" => KeyN, "O" => KeyO,
+        "P" => KeyP, "Q" => KeyQ, "R" => KeyR, "S" => KeyS, "T" => KeyT,
+        "U" => KeyU, "V" => KeyV, "W" => KeyW, "X" => KeyX, "Y" => KeyY,
+        "Z" => KeyZ,
+        "0" => Num0, "1" => Num1, "2" => Num2, "3" => Num3, "4" => Num4,
+        "5" => Num5, "6" => Num6, "7" => Num7, "8" => Num8, "9" => Num9,
+        "F1"  => F1,  "F2"  => F2,  "F3"  => F3,  "F4"  => F4,
+        "F5"  => F5,  "F6"  => F6,  "F7"  => F7,  "F8"  => F8,
+        "F9"  => F9,  "F10" => F10, "F11" => F11, "F12" => F12,
+        ";" => SemiColon, "=" => Equal, "-" => Minus,
+        "." => Dot, "," => Comma, "/" => Slash, "\\" => BackSlash,
+        "[" => LeftBracket, "]" => RightBracket, "'" => Quote, "`" => BackQuote,
+        "Space"     => Space,
+        "Enter"     => Return,
+        "Backspace"  => Backspace,
+        "Delete"    => Delete,
+        "Escape"    => Escape,
+        "Tab"       => Tab,
+        "Up"        => UpArrow,
+        "Down"      => DownArrow,
+        "Left"      => LeftArrow,
+        "Right"     => RightArrow,
+        "Home"      => Home,
+        "End"       => End,
+        "PageUp"    => PageUp,
+        "PageDown"  => PageDown,
+        _ => return None,
+    })
+}
+
+fn is_modifier(key: rdev::Key) -> bool {
+    matches!(
+        key,
+        rdev::Key::ControlLeft | rdev::Key::ControlRight
+        | rdev::Key::Alt | rdev::Key::AltGr
+        | rdev::Key::ShiftLeft | rdev::Key::ShiftRight
+        | rdev::Key::MetaLeft | rdev::Key::MetaRight
+    )
+}
+
+fn start_shortcut_listener(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut ctrl  = false;
+        let mut alt   = false;
+        let mut shift = false;
+        let mut super_ = false;
+
+        let callback = move |event: rdev::Event| {
+            match event.event_type {
+                rdev::EventType::KeyPress(key) => {
+                    match key {
+                        rdev::Key::ControlLeft | rdev::Key::ControlRight => ctrl  = true,
+                        rdev::Key::Alt | rdev::Key::AltGr               => alt   = true,
+                        rdev::Key::ShiftLeft | rdev::Key::ShiftRight     => shift = true,
+                        rdev::Key::MetaLeft | rdev::Key::MetaRight       => super_ = true,
+                        _ if !is_modifier(key) => {
+                            let matched = SHORTCUT.lock().ok().and_then(|s| {
+                                s.parsed.as_ref().map(|p| {
+                                    p.ctrl == ctrl
+                                        && p.alt == alt
+                                        && p.shift == shift
+                                        && p.super_ == super_
+                                        && p.key == key
+                                })
+                            }).unwrap_or(false);
+
+                            if matched {
+                                toggle_overlay_interaction(&app);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                rdev::EventType::KeyRelease(key) => {
+                    match key {
+                        rdev::Key::ControlLeft | rdev::Key::ControlRight => ctrl  = false,
+                        rdev::Key::Alt | rdev::Key::AltGr               => alt   = false,
+                        rdev::Key::ShiftLeft | rdev::Key::ShiftRight     => shift = false,
+                        rdev::Key::MetaLeft | rdev::Key::MetaRight       => super_ = false,
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        };
+
+        if let Err(e) = rdev::listen(callback) {
+            eprintln!("[marie] shortcut listener failed: {e:?}");
+            eprintln!("[marie] on Linux make sure you are in the `input` group: sudo usermod -aG input $USER");
+        }
+    });
+}
+
+fn toggle_overlay_interaction(app: &AppHandle) {
+    let was = OVERLAY_INTERACTIVE.fetch_xor(true, Ordering::SeqCst);
+    let now = !was;
+    eprintln!("[marie] overlay interaction: {}", if now { "on" } else { "off" });
+
+    #[cfg(target_os = "linux")]
+    set_overlay_input_linux(app, now);
+
+    app.emit("overlay-interactive-changed", now).ok();
+}
+
+#[cfg(target_os = "linux")]
+fn set_overlay_input_linux(app: &AppHandle, interactive: bool) {
+    let app = app.clone();
+    gtk::glib::idle_add_once(move || {
+        use gtk::prelude::WidgetExt;
+        use gtk_layer_shell::{KeyboardMode, LayerShell};
+        if let Some(overlay) = app.get_webview_window("overlay") {
+            if let Ok(win) = overlay.gtk_window() {
+                if interactive {
+                    win.set_keyboard_mode(KeyboardMode::OnDemand);
+                    win.input_shape_combine_region(None);
+                } else {
+                    win.set_keyboard_mode(KeyboardMode::None);
+                    let empty = cairo::Region::create();
+                    win.input_shape_combine_region(Some(&empty));
+                }
+            }
+        }
+    });
+}
+
+// ── Config persistence ────────────────────────────────────────────────────────
+
+fn load_saved_shortcut(app: &AppHandle) -> Option<String> {
+    let path = app.path().app_config_dir().ok()?.join("config.json");
+    let content = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&content).ok()?;
+    v["interaction_shortcut"].as_str().map(str::to_string)
+}
+
+fn save_shortcut_config(app: &AppHandle, shortcut: &str) {
+    let Ok(dir) = app.path().app_config_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let v = serde_json::json!({ "interaction_shortcut": shortcut });
+    let _ = std::fs::write(dir.join("config.json"), v.to_string());
+}
+
 // ── Tauri commands ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_interaction_shortcut() -> String {
+    SHORTCUT.lock().map(|s| s.raw.clone()).unwrap_or_default()
+}
+
+#[tauri::command]
+fn set_interaction_shortcut(app: AppHandle, shortcut: String) -> Result<(), String> {
+    let parsed = parse_shortcut(&shortcut)
+        .ok_or_else(|| format!("unrecognised shortcut: {shortcut}"))?;
+    {
+        let mut s = SHORTCUT.lock().map_err(|e| e.to_string())?;
+        s.raw = shortcut.clone();
+        s.parsed = Some(parsed);
+    }
+    save_shortcut_config(&app, &shortcut);
+    app.emit("shortcut-changed", shortcut).ok();
+    Ok(())
+}
+
+#[tauri::command]
+fn disable_overlay_interaction(app: AppHandle) {
+    OVERLAY_INTERACTIVE.store(false, Ordering::SeqCst);
+    #[cfg(target_os = "linux")]
+    set_overlay_input_linux(&app, false);
+    app.emit("overlay-interactive-changed", false).ok();
+}
 
 #[tauri::command]
 async fn detect_relic_rewards(player_count: u32) -> Result<Vec<ItemPriceResult>, String> {
@@ -137,12 +356,28 @@ pub fn run() {
             grade_riven_reroll,
             test_riven_trigger,
             show_test_riven_overlay,
+            get_interaction_shortcut,
+            set_interaction_shortcut,
+            disable_overlay_interaction,
         ])
         .setup(|app| {
             #[cfg(target_os = "linux")]
             if let Some(overlay) = app.get_webview_window("overlay") {
                 init_layer_shell(&overlay);
             }
+
+            // Load saved shortcut (or keep default).
+            if let Some(saved) = load_saved_shortcut(app.handle()) {
+                if let Some(parsed) = parse_shortcut(&saved) {
+                    if let Ok(mut s) = SHORTCUT.lock() {
+                        s.raw = saved;
+                        s.parsed = Some(parsed);
+                    }
+                }
+            }
+
+            // Start global key listener in its own OS thread.
+            start_shortcut_listener(app.handle().clone());
 
             tauri::async_runtime::spawn(async move {
                 match wfm::init_cache().await {
