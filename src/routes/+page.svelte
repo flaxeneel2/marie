@@ -8,71 +8,18 @@
   let detectedCount = $state<number | null>(null);
   let overrideEnabled = $state(false);
   let playerCount = $state(4);
-
-  // ── Keybind settings ─────────────────────────────────────────────────────────
-  let shortcutInput = $state('Ctrl+Shift+I');
-  let recordingShortcut = $state(false);
-  let shortcutSaved = $state(false);
-  let shortcutError = $state('');
-
-  function codeToKeyName(code: string): string | null {
-    if (code.startsWith('Key')) return code.slice(3);       // KeyA → A
-    if (code.startsWith('Digit')) return code.slice(5);     // Digit1 → 1
-    if (/^F\d+$/.test(code)) return code;                   // F1, F2, …
-    const map: Record<string, string> = {
-      Semicolon: ';', Equal: '=', Minus: '-', Period: '.', Comma: ',',
-      Slash: '/', Backslash: '\\', BracketLeft: '[', BracketRight: ']',
-      Quote: "'", Backquote: '`', Space: 'Space', Enter: 'Enter',
-      Backspace: 'Backspace', Delete: 'Delete', Escape: 'Escape', Tab: 'Tab',
-      ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
-      Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
-    };
-    return map[code] ?? null;
-  }
-
-  function startRecording(e: MouseEvent) {
-    recordingShortcut = true;
-    shortcutError = '';
-    (e.currentTarget as HTMLElement).focus();
-  }
-
-  function handleKeybindKeyDown(e: KeyboardEvent) {
-    if (!recordingShortcut) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
-    const keyName = codeToKeyName(e.code);
-    if (!keyName) return;
-    const parts: string[] = [];
-    if (e.ctrlKey)  parts.push('Ctrl');
-    if (e.altKey)   parts.push('Alt');
-    if (e.shiftKey) parts.push('Shift');
-    if (e.metaKey)  parts.push('Super');
-    parts.push(keyName);
-    shortcutInput = parts.join('+');
-    recordingShortcut = false;
-  }
-
-  async function saveShortcut() {
-    shortcutError = '';
-    try {
-      await invoke('set_interaction_shortcut', { shortcut: shortcutInput });
-      shortcutSaved = true;
-      setTimeout(() => (shortcutSaved = false), 2000);
-    } catch (e) {
-      shortcutError = String(e);
-    }
-  }
+  let overlayInteractive = $state(false);
 
   onMount(() => {
     invoke<string>('ee_log_path').then(p => (logPath = p));
-    invoke<string>('get_interaction_shortcut').then(s => (shortcutInput = s));
+    invoke<string>('get_interaction_shortcut').then(b => (currentBind = b));
 
-    // Mirror the overlay's trigger listener so the readout stays in sync
-    // with whatever the EE.log watcher detects.
     const cleanups: Array<() => void> = [];
     listen<number>('relic-trigger', (event) => {
       detectedCount = event.payload;
+    }).then(fn => cleanups.push(fn));
+    listen<boolean>('overlay-interactive-changed', (event) => {
+      overlayInteractive = event.payload;
     }).then(fn => cleanups.push(fn));
 
     return () => cleanups.forEach(fn => fn());
@@ -106,6 +53,67 @@
     await invoke('show_test_riven_overlay');
     setTimeout(() => (triggerStatus = ''), 4000);
   }
+
+  // ── Keybind recorder ──────────────────────────────────────────────────────
+  let currentBind = $state('');
+  let recordingBind = $state(false);
+  let bindStatus = $state('');
+
+  // Window-level listener active only while recording — div-level onkeydown
+  // is unreliable in WebKitGTK because clicking a div doesn't always give it
+  // keyboard focus.
+  $effect(() => {
+    if (!recordingBind) return;
+    window.addEventListener('keydown', onBindKeydown);
+    return () => window.removeEventListener('keydown', onBindKeydown);
+  });
+
+  function hyprlandKey(e: KeyboardEvent): string {
+    const map: Record<string, string> = {
+      ' ': 'SPACE', Enter: 'Return', Escape: 'Escape', Tab: 'Tab',
+      Backspace: 'BackSpace', Delete: 'Delete',
+      ArrowLeft: 'Left', ArrowRight: 'Right', ArrowUp: 'Up', ArrowDown: 'Down',
+      Home: 'Home', End: 'End', PageUp: 'Prior', PageDown: 'Next',
+      ';': 'semicolon', ':': 'colon', "'": 'apostrophe', '"': 'quotedbl',
+      ',': 'comma', '.': 'period', '/': 'slash', '\\': 'backslash',
+      '[': 'bracketleft', ']': 'bracketright', '`': 'grave',
+      '-': 'minus', '=': 'equal',
+    };
+    if (e.key.startsWith('F') && /^F\d+$/.test(e.key)) return e.key;
+    if (map[e.key]) return map[e.key];
+    if (e.key.length === 1) return e.key.toLowerCase();
+    return '';
+  }
+
+  function onBindKeydown(e: KeyboardEvent) {
+    e.preventDefault();
+    const MODS = ['Control', 'Alt', 'Shift', 'Meta'];
+    if (MODS.includes(e.key)) return;
+
+    const mods: string[] = [];
+    if (e.ctrlKey)  mods.push('CTRL');
+    if (e.altKey)   mods.push('ALT');
+    if (e.shiftKey) mods.push('SHIFT');
+    if (e.metaKey)  mods.push('SUPER');
+
+    const key = hyprlandKey(e);
+    if (!key) return;
+
+    currentBind = mods.length ? `${mods.join(' ')}, ${key}` : key;
+    recordingBind = false;
+  }
+
+  // Also re-injects the hyprctl bind — needed after Hyprland config reload
+  // wipes keyword-injected binds.
+  async function saveBind() {
+    try {
+      await invoke('set_interaction_shortcut', { modsKey: currentBind });
+      bindStatus = 'Saved & applied.';
+    } catch (err) {
+      bindStatus = `Error: ${err}`;
+    }
+    setTimeout(() => (bindStatus = ''), 4000);
+  }
 </script>
 
 <main>
@@ -127,6 +135,10 @@
       </dd>
       <dt>Overlay</dt>
       <dd>Transparent window – appears automatically when a relic reward screen is detected.</dd>
+      <dt>Interactive mode</dt>
+      <dd class:interactive-on={overlayInteractive} class:interactive-off={!overlayInteractive}>
+        {overlayInteractive ? '● ON' : '○ OFF'}
+      </dd>
     </dl>
   </section>
 
@@ -169,28 +181,28 @@
     <dl>
       <dt>Overlay hotkey</dt>
       <dd>
-        <p class="hint">Press this combination to toggle the overlay between click-through and interactive mode.</p>
-        <div class="keybind-row">
-          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-          <div
-            class="keybind-input"
-            class:recording={recordingShortcut}
-            tabindex="0"
-            role="button"
-            onclick={startRecording}
-            onkeydown={handleKeybindKeyDown}
-            onblur={() => (recordingShortcut = false)}
-          >
-            {recordingShortcut ? 'Press keys…' : shortcutInput}
-          </div>
-          <button onclick={saveShortcut}>Save</button>
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="bind-recorder"
+          class:recording={recordingBind}
+          tabindex="0"
+          role="button"
+          onclick={() => (recordingBind = true)}
+          onblur={() => (recordingBind = false)}
+          onkeydown={() => {}}
+        >
+          {#if recordingBind}
+            <span class="bind-hint">Press a key combo…</span>
+          {:else}
+            <span class="bind-value">{currentBind || '—'}</span>
+          {/if}
         </div>
-        {#if shortcutSaved}
-          <p class="status">Saved!</p>
-        {:else if shortcutError}
-          <p class="status error">{shortcutError}</p>
+        <p class="hint">Click the box, then press your desired key combination.</p>
+        <button onclick={saveBind}>Apply</button>
+        <p class="hint">Re-click Apply if the shortcut stops working after a Hyprland config reload — it re-injects the bind.</p>
+        {#if bindStatus}
+          <p class="status">{bindStatus}</p>
         {/if}
-        <p class="hint">Click the box then press your key combination. Note: on Linux/Wayland this requires being in the <code>input</code> group (<code>sudo usermod -aG input $USER</code>).</p>
       </dd>
     </dl>
   </section>
@@ -267,6 +279,9 @@
     font-size: 12px;
     word-break: break-all;
   }
+
+  .interactive-on  { color: #7ec8a0; font-weight: 600; }
+  .interactive-off { color: #555; }
 
   button {
     background: #c9a227;
@@ -368,10 +383,6 @@
     color: #7ec8a0;
   }
 
-  .status.error {
-    color: #ff6b6b;
-  }
-
   p {
     margin: 0 0 12px;
     font-size: 13px;
@@ -384,51 +395,38 @@
     margin: 4px 0 8px;
   }
 
-  .keybind-row {
-    display: flex;
+  .bind-recorder {
+    display: inline-flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 6px;
-  }
-
-  .keybind-input {
-    flex: 1;
+    min-width: 180px;
     background: #0f1117;
-    border: 1px solid #3a3d4a;
+    border: 1px solid #2a2d3a;
     border-radius: 6px;
-    padding: 7px 12px;
-    font-size: 13px;
-    font-family: 'Consolas', 'Courier New', monospace;
-    color: #ccc;
+    padding: 8px 14px;
+    margin-bottom: 8px;
     cursor: pointer;
-    user-select: none;
     outline: none;
     transition: border-color 0.15s;
   }
 
-  .keybind-input:focus,
-  .keybind-input:hover {
+  .bind-recorder:hover,
+  .bind-recorder:focus {
     border-color: #c9a227;
   }
 
-  .keybind-input.recording {
-    border-color: #c9a227;
-    color: #c9a227;
-    animation: pulse 1s ease-in-out infinite;
+  .bind-recorder.recording {
+    border-color: #7ec8a0;
   }
 
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: 0.6; }
-  }
-
-  code {
+  .bind-value {
     font-family: 'Consolas', 'Courier New', monospace;
-    font-size: 11px;
-    background: #0f1117;
-    border: 1px solid #2a2d3a;
-    border-radius: 3px;
-    padding: 1px 4px;
-    color: #aaa;
+    font-size: 12px;
+    color: #c9a227;
+  }
+
+  .bind-hint {
+    font-size: 12px;
+    color: #7ec8a0;
+    font-style: italic;
   }
 </style>

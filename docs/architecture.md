@@ -20,12 +20,13 @@ The overlay is always present at the compositor level; Svelte's `{#if visible}` 
 
 | file | responsibility |
 |------|---------------|
-| `lib.rs` | Tauri commands, app setup, wires all modules |
+| `lib.rs` | Tauri commands, app setup, overlay interactivity, keybind config, portal listener |
 | `ee_log.rs` | Tails EE.log; emits `relic-trigger` on `"Relic rewards initialized"` |
 | `warframe_window.rs` | Finds Warframe's window and returns its geometry in physical pixels |
-| `screenshot.rs` | Captures N reward-card regions (N = player_count, 1–4) from the screen |
-| `ocr.rs` | Runs ocrs neural-net OCR on each reward region; returns first text line |
+| `screenshot.rs` | Captures N reward-card regions or the riven stat region from the screen |
+| `ocr.rs` | Runs ocr-rs neural-net OCR on capture regions; returns text lines |
 | `wfm.rs` | WFM items cache (startup fetch, `RwLock<HashMap>`); live plat price fetch; Jaro-Winkler fuzzy matching |
+| `riven.rs` | Riven data model, grading algorithm, stat weights, fake data for tests |
 
 ## Tauri commands
 
@@ -35,6 +36,13 @@ The overlay is always present at the compositor level; Svelte's `{#if visible}` 
 | `test_trigger` | main window button | — (emits `relic-trigger`) |
 | `show_test_overlay` | main window button | — (emits `relic-test-data` with fake data) |
 | `ee_log_path` | main window on mount | `String` |
+| `capture_current_riven` | overlay on `riven-reroll` (first capture) | `RivenRollGrade` |
+| `grade_riven_reroll` | overlay on `riven-reroll` (subsequent rolls) | `RivenRerollResult` |
+| `test_riven_trigger` | main window button | — (emits `riven-reroll`) |
+| `show_test_riven_overlay` | main window button | — (emits `riven-test-data`) |
+| `disable_overlay_interaction` | overlay close button | — |
+| `get_interaction_shortcut` | main window on mount | `String` (e.g. `"CTRL SHIFT, i"`) |
+| `set_interaction_shortcut(mods_key)` | main window Apply button | `Result<(), String>` |
 
 ## IPC / event flow
 

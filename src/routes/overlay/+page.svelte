@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
 
@@ -49,6 +49,26 @@
 
   let overlayInteractive = $state(false);
 
+  async function updateInteractiveRegion() {
+    await tick(); // ensure badge and content are in the DOM
+    const scale = window.devicePixelRatio || 1;
+    const rects: { x: number; y: number; width: number; height: number }[] = [];
+    for (const sel of ['.card', '.riven-side', '.interactive-badge']) {
+      for (const el of document.querySelectorAll(sel)) {
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          rects.push({
+            x:      Math.floor(r.left   * scale),
+            y:      Math.floor(r.top    * scale),
+            width:  Math.ceil(r.width   * scale),
+            height: Math.ceil(r.height  * scale),
+          });
+        }
+      }
+    }
+    await invoke('set_interactive_region', { rects });
+  }
+
   // ── Relic state ──────────────────────────────────────────────────────────────
 
   let items = $state<ItemPriceResult[]>([]);
@@ -73,8 +93,9 @@
 
     Promise.all([
       // Interactive mode listener
-      listen<boolean>('overlay-interactive-changed', (event) => {
+      listen<boolean>('overlay-interactive-changed', async (event) => {
         overlayInteractive = event.payload;
+        if (event.payload) await updateInteractiveRegion();
       }),
 
       // Relic listeners

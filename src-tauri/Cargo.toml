@@ -30,23 +30,18 @@ once_cell = "1"
 strsim = "0.11"
 ocr-rs = "2.2.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
+futures-util = { version = "0.3", default-features = false, features = ["async-await"] }
 
 [target.'cfg(not(windows))'.dependencies]
-ashpd = { version = "0.9", default-features = false, features = ["tokio"] }
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "global_shortcuts"] }
 x11rb = { version = "0.13", default-features = false }
-rdev = "0.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk-layer-shell = { version = "0.8", features = ["v0_6"] }
 gtk = "0.18"
 cairo-rs = "0.18"
-# evdev-rs feature merges with the rdev entry above, giving Linux the evdev backend
-# (reads raw /dev/input events — works on Wayland without X11).
-# Requires user to be in the `input` group: sudo usermod -aG input $USER
-rdev = { version = "0.5", features = ["evdev-rs"] }
 
 [target.'cfg(windows)'.dependencies]
-rdev = "0.5"
 screenshots = "0.8"
 windows = { version = "0.61", features = [
     "Win32_Foundation",

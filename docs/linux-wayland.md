@@ -39,6 +39,15 @@ the 30 s auto-hide — if that proves unreliable in practice, move it to Tokio a
 Set in `common.nix` via `shellHook`. Prevents WebKitGTK crashes on Linux when the DMA-BUF
 renderer is active — do not remove.
 
+## Overlay interactivity
+
+By default the overlay surface is fully click-through (`KeyboardMode::None`, empty input shape
+region). A global hotkey — injected into Hyprland via `hyprctl keyword bind` at startup — toggles
+it to interactive mode, allowing the user to select text from overlay panels.
+
+Full details including the XDG GlobalShortcuts portal flow, keybind injection, and CSS
+pointer-events handling: [docs/overlay-interactivity.md](overlay-interactivity.md).
+
 ## Multi-monitor
 
 The layer-shell surface is assigned to whichever output the compositor picks (typically the

@@ -26,3 +26,4 @@ No test infrastructure exists yet.
 - [Conventions](docs/conventions.md) — Svelte 5 runes, Tauri config, ports, platform split patterns
 - [Linux / Wayland](docs/linux-wayland.md) — Hyprland window rules, Wayland overlay constraints and workarounds
 - [Rivens feature](docs/rivens.md) — riven data model, grading algorithm, stat weights, WFM riven API, OCR challenges
+- [Overlay interactivity](docs/overlay-interactivity.md) — XDG GlobalShortcuts portal, hyprctl keybind injection, GTK input shape, keybind recorder UI

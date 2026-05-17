@@ -19,145 +19,6 @@ static CURRENT_RIVEN_LINES: Lazy<Mutex<Option<Vec<String>>>> = Lazy::new(|| Mute
 
 static OVERLAY_INTERACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// Parsed representation of a keyboard shortcut for use in the rdev listener.
-#[derive(Clone)]
-struct ParsedShortcut {
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
-    super_: bool,
-    key: rdev::Key,
-}
-
-struct ShortcutState {
-    raw: String,
-    parsed: Option<ParsedShortcut>,
-}
-
-static SHORTCUT: Lazy<std::sync::Mutex<ShortcutState>> = Lazy::new(|| {
-    let default = "Ctrl+Shift+I".to_string();
-    let parsed = parse_shortcut(&default);
-    std::sync::Mutex::new(ShortcutState { raw: default, parsed })
-});
-
-fn parse_shortcut(s: &str) -> Option<ParsedShortcut> {
-    let mut ctrl = false;
-    let mut alt = false;
-    let mut shift = false;
-    let mut super_ = false;
-    let mut key: Option<rdev::Key> = None;
-
-    for part in s.split('+') {
-        match part.trim() {
-            "Ctrl"  => ctrl  = true,
-            "Alt"   => alt   = true,
-            "Shift" => shift  = true,
-            "Super" => super_ = true,
-            k       => key = Some(parse_key_name(k)?),
-        }
-    }
-
-    Some(ParsedShortcut { ctrl, alt, shift, super_, key: key? })
-}
-
-fn parse_key_name(s: &str) -> Option<rdev::Key> {
-    use rdev::Key::*;
-    Some(match s {
-        "A" => KeyA, "B" => KeyB, "C" => KeyC, "D" => KeyD, "E" => KeyE,
-        "F" => KeyF, "G" => KeyG, "H" => KeyH, "I" => KeyI, "J" => KeyJ,
-        "K" => KeyK, "L" => KeyL, "M" => KeyM, "N" => KeyN, "O" => KeyO,
-        "P" => KeyP, "Q" => KeyQ, "R" => KeyR, "S" => KeyS, "T" => KeyT,
-        "U" => KeyU, "V" => KeyV, "W" => KeyW, "X" => KeyX, "Y" => KeyY,
-        "Z" => KeyZ,
-        "0" => Num0, "1" => Num1, "2" => Num2, "3" => Num3, "4" => Num4,
-        "5" => Num5, "6" => Num6, "7" => Num7, "8" => Num8, "9" => Num9,
-        "F1"  => F1,  "F2"  => F2,  "F3"  => F3,  "F4"  => F4,
-        "F5"  => F5,  "F6"  => F6,  "F7"  => F7,  "F8"  => F8,
-        "F9"  => F9,  "F10" => F10, "F11" => F11, "F12" => F12,
-        ";" => SemiColon, "=" => Equal, "-" => Minus,
-        "." => Dot, "," => Comma, "/" => Slash, "\\" => BackSlash,
-        "[" => LeftBracket, "]" => RightBracket, "'" => Quote, "`" => BackQuote,
-        "Space"     => Space,
-        "Enter"     => Return,
-        "Backspace"  => Backspace,
-        "Delete"    => Delete,
-        "Escape"    => Escape,
-        "Tab"       => Tab,
-        "Up"        => UpArrow,
-        "Down"      => DownArrow,
-        "Left"      => LeftArrow,
-        "Right"     => RightArrow,
-        "Home"      => Home,
-        "End"       => End,
-        "PageUp"    => PageUp,
-        "PageDown"  => PageDown,
-        _ => return None,
-    })
-}
-
-fn is_modifier(key: rdev::Key) -> bool {
-    matches!(
-        key,
-        rdev::Key::ControlLeft | rdev::Key::ControlRight
-        | rdev::Key::Alt | rdev::Key::AltGr
-        | rdev::Key::ShiftLeft | rdev::Key::ShiftRight
-        | rdev::Key::MetaLeft | rdev::Key::MetaRight
-    )
-}
-
-fn start_shortcut_listener(app: AppHandle) {
-    std::thread::spawn(move || {
-        let mut ctrl  = false;
-        let mut alt   = false;
-        let mut shift = false;
-        let mut super_ = false;
-
-        let callback = move |event: rdev::Event| {
-            match event.event_type {
-                rdev::EventType::KeyPress(key) => {
-                    match key {
-                        rdev::Key::ControlLeft | rdev::Key::ControlRight => ctrl  = true,
-                        rdev::Key::Alt | rdev::Key::AltGr               => alt   = true,
-                        rdev::Key::ShiftLeft | rdev::Key::ShiftRight     => shift = true,
-                        rdev::Key::MetaLeft | rdev::Key::MetaRight       => super_ = true,
-                        _ if !is_modifier(key) => {
-                            let matched = SHORTCUT.lock().ok().and_then(|s| {
-                                s.parsed.as_ref().map(|p| {
-                                    p.ctrl == ctrl
-                                        && p.alt == alt
-                                        && p.shift == shift
-                                        && p.super_ == super_
-                                        && p.key == key
-                                })
-                            }).unwrap_or(false);
-
-                            if matched {
-                                toggle_overlay_interaction(&app);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                rdev::EventType::KeyRelease(key) => {
-                    match key {
-                        rdev::Key::ControlLeft | rdev::Key::ControlRight => ctrl  = false,
-                        rdev::Key::Alt | rdev::Key::AltGr               => alt   = false,
-                        rdev::Key::ShiftLeft | rdev::Key::ShiftRight     => shift = false,
-                        rdev::Key::MetaLeft | rdev::Key::MetaRight       => super_ = false,
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-        };
-
-        if let Err(e) = rdev::listen(callback) {
-            eprintln!("[marie] shortcut listener failed: {e:?}");
-            eprintln!("[marie] on Linux make sure you are in the `input` group: sudo usermod -aG input $USER");
-        }
-    });
-}
-
 fn toggle_overlay_interaction(app: &AppHandle) {
     let was = OVERLAY_INTERACTIVE.fetch_xor(true, Ordering::SeqCst);
     let now = !was;
@@ -178,8 +39,10 @@ fn set_overlay_input_linux(app: &AppHandle, interactive: bool) {
         if let Some(overlay) = app.get_webview_window("overlay") {
             if let Ok(win) = overlay.gtk_window() {
                 if interactive {
-                    win.set_keyboard_mode(KeyboardMode::OnDemand);
-                    win.input_shape_combine_region(None);
+                    // Exclusive: steals keyboard from Warframe/XWayland so the overlay
+                    // can receive text selection shortcuts (ctrl+c etc).
+                    // Input region stays passthrough until frontend calls set_interactive_region.
+                    win.set_keyboard_mode(KeyboardMode::Exclusive);
                 } else {
                     win.set_keyboard_mode(KeyboardMode::None);
                     let empty = cairo::Region::create();
@@ -190,42 +53,162 @@ fn set_overlay_input_linux(app: &AppHandle, interactive: bool) {
     });
 }
 
-// ── Config persistence ────────────────────────────────────────────────────────
+// ── Keybind config (Linux only) ───────────────────────────────────────────────
 
-fn load_saved_shortcut(app: &AppHandle) -> Option<String> {
-    let path = app.path().app_config_dir().ok()?.join("config.json");
-    let content = std::fs::read_to_string(path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&content).ok()?;
-    v["interaction_shortcut"].as_str().map(str::to_string)
+// Stores just the "MODS, key" portion, e.g. "CTRL SHIFT, i".
+// Marie injects the full bind via `hyprctl keyword bind` at startup.
+const DEFAULT_BIND: &str = "CTRL SHIFT, i";
+const SHORTCUT_ID: &str  = "toggle-overlay";
+const APP_ID: &str        = "net.flaxeneel2.marie";
+
+#[cfg(target_os = "linux")]
+fn config_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_config_dir().ok().map(|d| d.join("config.json"))
 }
 
-fn save_shortcut_config(app: &AppHandle, shortcut: &str) {
-    let Ok(dir) = app.path().app_config_dir() else { return };
-    let _ = std::fs::create_dir_all(&dir);
-    let v = serde_json::json!({ "interaction_shortcut": shortcut });
-    let _ = std::fs::write(dir.join("config.json"), v.to_string());
+#[cfg(target_os = "linux")]
+fn load_shortcut_config(app: &AppHandle) -> String {
+    config_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v["bind"].as_str().map(str::to_string))
+        .unwrap_or_else(|| DEFAULT_BIND.to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn save_shortcut_config(app: &AppHandle, mods_key: &str) {
+    if let Some(path) = config_path(app) {
+        let _ = std::fs::create_dir_all(path.parent().unwrap());
+        let _ = std::fs::write(path, serde_json::json!({ "bind": mods_key }).to_string());
+    }
+}
+
+// Removes ALL accumulated binds for `mods_key` (e.g. "CTRL, semicolon").
+// hyprctl keyword bind always appends — without flushing first, repeated
+// Apply clicks or restarts pile up duplicates that cancel each other out.
+#[cfg(target_os = "linux")]
+fn flush_hyprland_bind(mods_key: &str) {
+    for _ in 0..32 {
+        let Ok(out) = std::process::Command::new("hyprctl")
+            .args(["keyword", "unbind", mods_key])
+            .output() else { break };
+        // hyprctl prints "ok" on success; anything else means no bind was found.
+        if out.stdout.trim_ascii() != b"ok" {
+            break;
+        }
+    }
+}
+
+// Injects a fresh single bind into the running Hyprland session.
+#[cfg(target_os = "linux")]
+fn apply_hyprland_bind(mods_key: &str) -> Result<(), String> {
+    flush_hyprland_bind(mods_key);
+
+    let bind_val = format!("{mods_key}, global, {APP_ID}:{SHORTCUT_ID}");
+    let status = std::process::Command::new("hyprctl")
+        .args(["keyword", "bind", &bind_val])
+        .status()
+        .map_err(|e| format!("hyprctl not found: {e}"))?;
+
+    if status.success() {
+        eprintln!("[marie] hyprctl bind set: {bind_val}");
+        Ok(())
+    } else {
+        Err(format!("hyprctl exited with {status}"))
+    }
+}
+
+// ── XDG GlobalShortcuts portal listener ──────────────────────────────────────
+
+#[cfg(not(windows))]
+async fn start_portal_listener(app: AppHandle) {
+    use ashpd::desktop::global_shortcuts::{BindShortcutsOptions, GlobalShortcuts, NewShortcut};
+    use ashpd::desktop::CreateSessionOptions;
+    use futures_util::StreamExt;
+
+    let proxy = match GlobalShortcuts::new().await {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[marie] GlobalShortcuts portal unavailable: {e}");
+            return;
+        }
+    };
+
+    let session = match proxy.create_session(CreateSessionOptions::default()).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[marie] failed to create GlobalShortcuts session: {e}");
+            return;
+        }
+    };
+
+    let shortcut = NewShortcut::new("toggle-overlay", "Toggle overlay interactive mode");
+    match proxy.bind_shortcuts(&session, &[shortcut], None, BindShortcutsOptions::default()).await {
+        Ok(req) => {
+            if let Err(e) = req.response() {
+                eprintln!("[marie] bind_shortcuts response error: {e}");
+                return;
+            }
+            eprintln!("[marie] GlobalShortcuts: registered 'toggle-overlay'");
+        }
+        Err(e) => {
+            eprintln!("[marie] bind_shortcuts failed: {e}");
+            return;
+        }
+    }
+
+    let mut stream = match proxy.receive_activated().await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[marie] failed to subscribe to Activated signal: {e}");
+            return;
+        }
+    };
+
+    while let Some(activated) = stream.next().await {
+        if activated.shortcut_id() == "toggle-overlay" {
+            toggle_overlay_interaction(&app);
+        }
+    }
+
+    eprintln!("[marie] GlobalShortcuts stream ended");
 }
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
-#[tauri::command]
-fn get_interaction_shortcut() -> String {
-    SHORTCUT.lock().map(|s| s.raw.clone()).unwrap_or_default()
+#[derive(serde::Deserialize)]
+struct PhysRect {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
 }
 
+/// Called by the overlay frontend after entering interactive mode.
+/// Builds a Cairo input-shape region from the measured content element bounds so that
+/// only those pixels capture pointer events — the rest of the screen stays passthrough.
+#[cfg(target_os = "linux")]
 #[tauri::command]
-fn set_interaction_shortcut(app: AppHandle, shortcut: String) -> Result<(), String> {
-    let parsed = parse_shortcut(&shortcut)
-        .ok_or_else(|| format!("unrecognised shortcut: {shortcut}"))?;
-    {
-        let mut s = SHORTCUT.lock().map_err(|e| e.to_string())?;
-        s.raw = shortcut.clone();
-        s.parsed = Some(parsed);
-    }
-    save_shortcut_config(&app, &shortcut);
-    app.emit("shortcut-changed", shortcut).ok();
-    Ok(())
+fn set_interactive_region(app: AppHandle, rects: Vec<PhysRect>) {
+    gtk::glib::idle_add_once(move || {
+        use gtk::prelude::WidgetExt;
+        if let Some(overlay) = app.get_webview_window("overlay") {
+            if let Ok(win) = overlay.gtk_window() {
+                let region = cairo::Region::create();
+                for r in &rects {
+                    let rect = cairo::RectangleInt::new(r.x, r.y, r.width, r.height);
+                    region.union_rectangle(&rect).ok();
+                }
+                // Empty region when no rects: stays passthrough.
+                win.input_shape_combine_region(Some(&region));
+            }
+        }
+    });
 }
+
+#[cfg(not(target_os = "linux"))]
+#[tauri::command]
+fn set_interactive_region(_app: AppHandle, _rects: Vec<PhysRect>) {}
 
 #[tauri::command]
 fn disable_overlay_interaction(app: AppHandle) {
@@ -290,7 +273,6 @@ async fn capture_current_riven() -> Result<riven::RivenRollGrade, String> {
 
     eprintln!("[riven] capture_current_riven done — {} lines: {:?}", lines.len(), lines);
     *CURRENT_RIVEN_LINES.lock().await = Some(lines.clone());
-    // Grade the current state for immediate overlay display.
     Ok(riven::grade_panels(lines.clone(), lines).await.new)
 }
 
@@ -310,7 +292,6 @@ async fn grade_riven_reroll() -> Result<riven::RivenRerollResult, String> {
 
     eprintln!("[riven] new OCR lines ({}): {:?}", new_lines.len(), new_lines);
 
-    // Rotate: whatever was current becomes old, new OCR becomes the new current.
     let old_lines = {
         let mut guard = CURRENT_RIVEN_LINES.lock().await;
         let old = guard.take().unwrap_or_default();
@@ -322,14 +303,41 @@ async fn grade_riven_reroll() -> Result<riven::RivenRerollResult, String> {
     Ok(riven::grade_panels(old_lines, new_lines).await)
 }
 
-/// Fires the riven-reroll event so the overlay exercises the real OCR + grading
-/// pipeline. Mirrors how test_trigger works for relics.
+#[cfg(target_os = "linux")]
+#[tauri::command]
+fn get_interaction_shortcut(app: AppHandle) -> String {
+    load_shortcut_config(&app)
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tauri::command]
+fn get_interaction_shortcut(_app: AppHandle) -> String {
+    DEFAULT_BIND.to_string()
+}
+
+#[cfg(target_os = "linux")]
+#[tauri::command]
+fn set_interaction_shortcut(app: AppHandle, mods_key: String) -> Result<(), String> {
+    // If the key changed, flush the old bind so it doesn't linger.
+    let old = load_shortcut_config(&app);
+    if old != mods_key {
+        flush_hyprland_bind(&old);
+    }
+    save_shortcut_config(&app, &mods_key);
+    apply_hyprland_bind(&mods_key) // apply_hyprland_bind also flushes mods_key itself
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tauri::command]
+fn set_interaction_shortcut(_app: AppHandle, _mods_key: String) -> Result<(), String> {
+    Ok(())
+}
+
 #[tauri::command]
 fn test_riven_trigger(app: AppHandle) {
     app.emit("riven-reroll", ()).ok();
 }
 
-/// Sends pre-baked fake data directly to the overlay, bypassing OCR entirely.
 #[tauri::command]
 fn show_test_riven_overlay(app: AppHandle) {
     app.emit("riven-test-data", riven::fake_reroll_result()).ok();
@@ -356,9 +364,10 @@ pub fn run() {
             grade_riven_reroll,
             test_riven_trigger,
             show_test_riven_overlay,
+            disable_overlay_interaction,
+            set_interactive_region,
             get_interaction_shortcut,
             set_interaction_shortcut,
-            disable_overlay_interaction,
         ])
         .setup(|app| {
             #[cfg(target_os = "linux")]
@@ -366,18 +375,19 @@ pub fn run() {
                 init_layer_shell(&overlay);
             }
 
-            // Load saved shortcut (or keep default).
-            if let Some(saved) = load_saved_shortcut(app.handle()) {
-                if let Some(parsed) = parse_shortcut(&saved) {
-                    if let Ok(mut s) = SHORTCUT.lock() {
-                        s.raw = saved;
-                        s.parsed = Some(parsed);
-                    }
+            #[cfg(target_os = "linux")]
+            {
+                let bind = load_shortcut_config(app.handle());
+                if let Err(e) = apply_hyprland_bind(&bind) {
+                    eprintln!("[marie] hyprctl bind failed at startup: {e}");
                 }
             }
 
-            // Start global key listener in its own OS thread.
-            start_shortcut_listener(app.handle().clone());
+            #[cfg(not(windows))]
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move { start_portal_listener(handle).await });
+            }
 
             tauri::async_runtime::spawn(async move {
                 match wfm::init_cache().await {
@@ -420,19 +430,13 @@ fn init_layer_shell(overlay: &tauri::WebviewWindow) {
     win.set_anchor(Edge::Right,  true);
     win.set_anchor(Edge::Top,    true);
     win.set_anchor(Edge::Bottom, true);
-    // -1: don't push panels/taskbars; surface floats above everything
     win.set_exclusive_zone(-1);
     win.set_keyboard_mode(KeyboardMode::None);
     win.set_namespace("marie-overlay");
 
-    // Window was created hidden (visible:false in tauri.conf.json) so that
-    // init_layer_shell could run before the GTK window was mapped.  Show it now.
     use gtk::prelude::WidgetExt;
     win.show_all();
 
-    // Make the entire surface click-through by setting an empty input region.
-    // On Wayland this becomes wl_surface.set_input_region(empty), so all pointer
-    // events pass straight through to whatever is underneath.
     let empty = cairo::Region::create();
     win.input_shape_combine_region(Some(&empty));
 
