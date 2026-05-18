@@ -338,13 +338,13 @@ fn set_interaction_shortcut(_app: AppHandle, _mods_key: String) -> Result<(), St
 
 #[cfg(all(feature = "memory", target_os = "linux"))]
 #[tauri::command]
-async fn get_account_info() -> Option<account_memory::AccountInfo> {
-    account_memory::ACCOUNT_INFO.lock().await.clone()
+fn get_account_info() -> Option<account_memory::AccountInfo> {
+    account_memory::ACCOUNT_INFO.lock().unwrap().clone()
 }
 
 #[cfg(not(all(feature = "memory", target_os = "linux")))]
 #[tauri::command]
-async fn get_account_info() -> Option<serde_json::Value> {
+fn get_account_info() -> Option<serde_json::Value> {
     None
 }
 
@@ -368,6 +368,11 @@ fn show_test_riven_overlay(app: AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Fork privileged child, do initial account scan, then drop to real UID —
+    // all before Tauri / D-Bus / GTK initialise. See docs/memory.md.
+    #[cfg(all(feature = "memory", target_os = "linux"))]
+    account_memory::init();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
@@ -418,10 +423,6 @@ pub fn run() {
                 }
             });
             ee_log::start_watcher(app.handle().clone());
-
-            #[cfg(all(feature = "memory", target_os = "linux"))]
-            tauri::async_runtime::spawn(async { account_memory::init().await });
-
             Ok(())
         })
         .run(tauri::generate_context!())

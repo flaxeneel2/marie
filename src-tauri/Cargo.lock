@@ -2852,6 +2852,7 @@ dependencies = [
  "gtk",
  "gtk-layer-shell",
  "image 0.25.10",
+ "libc",
  "notify",
  "ocr-rs",
  "once_cell",
