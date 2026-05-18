@@ -2,7 +2,10 @@
 
 Marie is a Warframe companion overlay — reads `EE.log` and uses OCR to show relic drop prices in platinum and ducats. Planned future modules: riven roll calculator, mastery calculator.
 
-**Critical constraint**: No DLL injection, no memory reading. EAC must not be triggered. All game data from log parsing or screen capture only.
+**Two build variants:**
+
+- **Standard build** (default): no DLL injection, no memory reading. EAC-safe. All game data from log parsing or screen capture only.
+- **Memory build** (`--features memory`, Linux only, must run as root): reads `/proc/<pid>/mem` without ptrace to extract the authentication nonce; unlocks account-gated features (mastery overview, etc.). See [docs/memory.md](docs/memory.md).
 
 ## Commands
 
@@ -27,3 +30,4 @@ No test infrastructure exists yet.
 - [Linux / Wayland](docs/linux-wayland.md) — Hyprland window rules, Wayland overlay constraints and workarounds
 - [Rivens feature](docs/rivens.md) — riven data model, grading algorithm, stat weights, WFM riven API, OCR challenges
 - [Overlay interactivity](docs/overlay-interactivity.md) — XDG GlobalShortcuts portal, hyprctl keybind injection, GTK input shape, keybind recorder UI
+- [Memory feature](docs/memory.md) — `/proc/<pid>/mem` nonce scan, root requirement, EAC safety, account data flow

@@ -5,6 +5,9 @@ mod screenshot;
 mod warframe_window;
 mod wfm;
 
+#[cfg(all(feature = "memory", target_os = "linux"))]
+mod account_memory;
+
 use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
@@ -333,6 +336,18 @@ fn set_interaction_shortcut(_app: AppHandle, _mods_key: String) -> Result<(), St
     Ok(())
 }
 
+#[cfg(all(feature = "memory", target_os = "linux"))]
+#[tauri::command]
+async fn get_account_info() -> Option<account_memory::AccountInfo> {
+    account_memory::ACCOUNT_INFO.lock().await.clone()
+}
+
+#[cfg(not(all(feature = "memory", target_os = "linux")))]
+#[tauri::command]
+async fn get_account_info() -> Option<serde_json::Value> {
+    None
+}
+
 #[tauri::command]
 fn test_riven_trigger(app: AppHandle) {
     app.emit("riven-reroll", ()).ok();
@@ -368,6 +383,7 @@ pub fn run() {
             set_interactive_region,
             get_interaction_shortcut,
             set_interaction_shortcut,
+            get_account_info,
         ])
         .setup(|app| {
             #[cfg(target_os = "linux")]
@@ -402,6 +418,10 @@ pub fn run() {
                 }
             });
             ee_log::start_watcher(app.handle().clone());
+
+            #[cfg(all(feature = "memory", target_os = "linux"))]
+            tauri::async_runtime::spawn(async { account_memory::init().await });
+
             Ok(())
         })
         .run(tauri::generate_context!())

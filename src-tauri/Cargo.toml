@@ -14,6 +14,9 @@ edition = "2024"
 name = "marie_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+memory = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 ureq = { version = "2", default-features = false, features = ["tls"] }
