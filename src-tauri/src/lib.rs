@@ -8,6 +8,9 @@ mod wfm;
 #[cfg(all(feature = "memory", target_os = "linux"))]
 mod account_memory;
 
+#[cfg(all(feature = "memory", target_os = "linux"))]
+mod inventory;
+
 use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
@@ -348,6 +351,18 @@ fn get_account_info() -> Option<serde_json::Value> {
     None
 }
 
+#[cfg(all(feature = "memory", target_os = "linux"))]
+#[tauri::command]
+async fn get_inventory(app: AppHandle) -> Result<inventory::InventoryCache, String> {
+    inventory::get_or_refresh_inventory(&app).await
+}
+
+#[cfg(not(all(feature = "memory", target_os = "linux")))]
+#[tauri::command]
+async fn get_inventory() -> Result<serde_json::Value, String> {
+    Err("inventory requires the memory feature (Linux only)".into())
+}
+
 #[tauri::command]
 fn test_riven_trigger(app: AppHandle) {
     app.emit("riven-reroll", ()).ok();
@@ -389,6 +404,7 @@ pub fn run() {
             get_interaction_shortcut,
             set_interaction_shortcut,
             get_account_info,
+            get_inventory,
         ])
         .setup(|app| {
             #[cfg(target_os = "linux")]

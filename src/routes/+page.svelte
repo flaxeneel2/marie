@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
-  import { invoke } from '@tauri-apps/api/core';
+  import {invoke, type InvokeArgs} from '@tauri-apps/api/core';
 
   let logPath = $state('…');
   let triggerStatus = $state('');
@@ -67,6 +67,20 @@
     window.addEventListener('keydown', onBindKeydown);
     return () => window.removeEventListener('keydown', onBindKeydown);
   });
+
+  window.core = window.core || {} as Window["core"];
+
+  window.core.invoke = async (fn_to_invoke: string, args: InvokeArgs | undefined) => {
+    const start = performance.now();
+    try {
+      const res = await invoke(fn_to_invoke, args);
+      console.log(`Fetch [${fn_to_invoke}] took ${performance.now() - start}ms.`, res);
+      return res;
+    } catch (error) {
+      console.error(`Command [${fn_to_invoke}] failed:`, error);
+      throw error;
+    }
+  };
 
   function hyprlandKey(e: KeyboardEvent): string {
     const map: Record<string, string> = {
