@@ -1,3 +1,4 @@
+import type { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 declare global {
     interface Window {
         core: {
@@ -5,3 +6,5 @@ declare global {
         };
     }
 }
+
+export {};
