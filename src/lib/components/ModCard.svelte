@@ -35,6 +35,7 @@
       description: item.description ?? '',
       levelStats,
       full,
+      count: full ? null : item.count,
     });
     return URL.createObjectURL(blob);
   }
@@ -86,9 +87,6 @@
   {#if thumbUrl}
     <img src={thumbUrl} alt={item.displayName} class="mod-thumb" loading="lazy" />
   {/if}
-  {#if item.count !== null && item.count > 1}
-    <span class="mod-count">{item.count}</span>
-  {/if}
 </div>
 
 {#if hovering}
@@ -109,19 +107,6 @@
     width: 100%;
     display: block;
     border-radius: 4px;
-  }
-  .mod-count {
-    position: absolute;
-    top: 4px;
-    left: 5px;
-    font-size: 11px;
-    font-weight: 700;
-    color: #c9a227;
-    background: rgba(0, 0, 0, 0.6);
-    border-radius: 3px;
-    padding: 1px 4px;
-    pointer-events: none;
-    line-height: 1.4;
   }
   :global(.mod-hover) {
     position: fixed;

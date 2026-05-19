@@ -16,6 +16,7 @@ export interface ModCardParams {
   description: string;
   levelStats:  unknown[] | null;
   full:        boolean;
+  count?:      number | null;
 }
 
 // ── Styling ───────────────────────────────────────────────────────────────────
@@ -209,6 +210,22 @@ async function drawPolarity(tier: string, polarity: string): Promise<HTMLCanvasE
   return c;
 }
 
+async function drawCountBacker(
+  backer: HTMLImageElement, tier: string, count: number,
+): Promise<HTMLCanvasElement> {
+  const s = `${count}`;
+  const [tmp, tctx] = mkCanvas(1, 1);
+  tctx.font = 'bold 14px "Roboto"';
+  const textW = tctx.measureText(s).width;
+  const w = Math.max(backer.naturalWidth, Math.ceil(textW) + 20);
+  const [c, ctx] = mkCanvas(w, backer.naturalHeight);
+  ctx.drawImage(flipH(backer), 0, 0, w, backer.naturalHeight);
+  ctx.font = 'bold 14px "Roboto"'; ctx.fillStyle = textColor(tier);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText(s, w * 0.45, c.height * 0.7);
+  return c;
+}
+
 async function drawBacker(
   backer: HTMLImageElement, tier: string, base: number, polarity: string, rank: number,
 ): Promise<HTMLCanvasElement> {
@@ -268,27 +285,56 @@ async function drawBg(
 ): Promise<HTMLCanvasElement> {
   const [c, ctx] = mkCanvas(background.naturalWidth, background.naturalHeight);
   ctx.drawImage(background, 0, 0);
-  const maxW  = c.width * 0.85;
+  const maxW       = c.width * 0.78;
+  const lineSpacing = 18;
+  const nameLineH   = 24;
   const desc  = getDesc(rank, description, levelStats);
   const lines = desc?.split('\n');
-  const modTextH = calcTextHeight(ctx, maxW, name, lines);
-  const lineSpacing = 15;
+
+  ctx.font = TITLE_FONT;
+  const nameLines  = wrapText(ctx, name, maxW);
+  const extraNameH = Math.max(0, nameLines.length - 1) * nameLineH;
+  const modTextH   = calcTextHeight(ctx, maxW, name, lines) + extraNameH;
   let pos = c.height * 0.17;
 
   if (modImage) {
-    const thumbH = Math.max(0, modImage.naturalHeight - modTextH);
-    ctx.drawImage(modImage, H_PAD, pos, c.width - H_PAD * 2, thumbH);
+    const displayW = c.width - H_PAD * 2;
+    const thumbH   = Math.max(0, modImage.naturalHeight - modTextH);
+    if (thumbH > 0) {
+      // crop center slice: compute source region that fills displayW x thumbH
+      const srcH = Math.min(modImage.naturalHeight, modImage.naturalWidth * thumbH / displayW);
+      const sy   = Math.max(0, (modImage.naturalHeight - srcH) / 2);
+
+      // draw to temp canvas so we can alpha-fade without touching the background
+      const [tc, tctx] = mkCanvas(c.width, thumbH);
+      tctx.drawImage(modImage, 0, sy, modImage.naturalWidth, srcH, H_PAD, 0, displayW, thumbH);
+
+      // punch out top and bottom with destination-out gradient
+      tctx.globalCompositeOperation = 'destination-out';
+      const topFade = Math.min(24, thumbH * 0.2);
+      const tg = tctx.createLinearGradient(0, 0, 0, topFade);
+      tg.addColorStop(0, 'rgba(0,0,0,1)'); tg.addColorStop(1, 'rgba(0,0,0,0)');
+      tctx.fillStyle = tg; tctx.fillRect(0, 0, c.width, topFade);
+
+      const botFade = Math.min(64, thumbH * 0.45);
+      const bg = tctx.createLinearGradient(0, thumbH - botFade, 0, thumbH);
+      bg.addColorStop(0, 'rgba(0,0,0,0)'); bg.addColorStop(1, 'rgba(0,0,0,1)');
+      tctx.fillStyle = bg; tctx.fillRect(0, thumbH - botFade, c.width, botFade);
+
+      ctx.drawImage(tc, 0, pos);
+    }
     pos += thumbH;
   }
 
   ctx.fillStyle = textColor(tier); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.font = TITLE_FONT;
-  ctx.fillText(name, c.width * 0.5, pos + H_PAD * 2);
-  pos += H_PAD + lineSpacing;
+  let nameY = (pos + H_PAD * 2) - ((nameLines.length - 1) * nameLineH) / 2;
+  nameLines.forEach(line => { ctx.fillText(line, c.width * 0.5, nameY); nameY += nameLineH; });
+  pos += H_PAD * 2 + lineSpacing;
 
   if (desc?.length) {
     ctx.font = DESC_FONT;
-    let y = pos + H_PAD * 2;
+    let y = pos + H_PAD * 3;
     lines?.forEach(line => wrapText(ctx, line, maxW).forEach(t => {
       ctx.fillText(t, c.width * 0.5, y, maxW); y += lineSpacing;
     }));
@@ -306,7 +352,7 @@ async function drawBg(
 
 export async function generateModCard(params: ModCardParams): Promise<Blob> {
   await ensureFont();
-  const { name, imageName, rarity, polarity, fusionLimit, rank, baseDrain, compatName, description, levelStats, full } = params;
+  const { name, imageName, rarity, polarity, fusionLimit, rank, baseDrain, compatName, description, levelStats, full, count } = params;
   const tier    = getTier(rarity, name);
   const isRiven = tier === 'Omega';
   const cw      = isRiven ? 292 : 256;
@@ -341,7 +387,7 @@ export async function generateModCard(params: ModCardParams): Promise<Blob> {
     octx.drawImage(c, (out.width - c.width) / 2, (out.height - c.height) / 2);
     return canvasToBlob(out);
   } else {
-    const { cornerLights, bottom, top } = await getFrame(tier);
+    const [{ backer }, { cornerLights, bottom, top }] = await Promise.all([getBackground(tier), getFrame(tier)]);
     const [c, ctx] = mkCanvas(cw, 256);
     if (modImage) {
       const thumbH = top.naturalHeight / 2 + bottom.naturalHeight / 2;
@@ -349,8 +395,18 @@ export async function generateModCard(params: ModCardParams): Promise<Blob> {
     }
     ctx.fillStyle = textColor(tier); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = TITLE_FONT;
-    ctx.fillText(name, c.width * 0.5, top.naturalHeight);
+    const nameLines = wrapText(ctx, name, c.width * 0.82);
+    const nameLineH = 24;
+    let nameY = top.naturalHeight - ((nameLines.length - 1) * nameLineH) / 2;
+    nameLines.forEach(line => { ctx.fillText(line, c.width * 0.5, nameY); nameY += nameLineH; });
     ctx.drawImage(top, 0, 0);
+    const outH = isRiven ? 180 : 150;
+    const backerCanvas = await drawBacker(backer, tier, baseDrain, polarity, rank);
+    ctx.drawImage(backerCanvas, c.width * 0.8, outH * 0.15);
+    if (count != null && count > 1) {
+      const countCanvas = await drawCountBacker(backer, tier, count);
+      ctx.drawImage(countCanvas, c.width * 0.2 - countCanvas.width, outH * 0.15);
+    }
     const bot  = await drawBottom(bottom, cornerLights, tier, fusionLimit, rank);
     const posY = top.naturalHeight * 0.5;
     if (bottom.naturalWidth > c.width) {
