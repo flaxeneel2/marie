@@ -693,6 +693,9 @@ pub struct DisplayItem {
     #[serde(rename = "overlayImageName")]
     pub overlay_image_name: String,
     pub count: Option<i32>,
+    pub rank: Option<i32>,
+    #[serde(rename = "maxRank")]
+    pub max_rank: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -723,6 +726,13 @@ fn normalize_recipe_path(path: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Borrowed(path)
 }
 
+fn parse_rank(fingerprint: Option<&str>) -> i32 {
+    fingerprint
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| v["lvl"].as_i64())
+        .unwrap_or(0) as i32
+}
+
 pub fn build_view(
     cache: &InventoryCache,
     names: &std::collections::HashMap<String, String>,
@@ -730,6 +740,7 @@ pub fn build_view(
     types: &std::collections::HashMap<String, String>,
     images: &std::collections::HashMap<String, String>,
     overlay_images: &std::collections::HashMap<String, String>,
+    fusion_limits: &std::collections::HashMap<String, i32>,
 ) -> InventoryView {
     let name_of = |item_type: &str| -> String {
         let key = normalize_recipe_path(item_type);
@@ -753,6 +764,8 @@ pub fn build_view(
             overlay_image_name: overlay_of(&i.item_type),
             item_type: i.item_type.clone(),
             count: None,
+            rank: None,
+            max_rank: None,
         }).collect()
     };
 
@@ -763,6 +776,8 @@ pub fn build_view(
             overlay_image_name: overlay_of(&i.item_type),
             item_type: i.item_type.clone(),
             count: Some(i.item_count),
+            rank: None,
+            max_rank: None,
         }).collect()
     };
 
@@ -802,6 +817,8 @@ pub fn build_view(
             overlay_image_name: overlay_of(&item.item_type),
             item_type: item.item_type.clone(),
             count: Some(item.item_count),
+            rank: None,
+            max_rank: None,
         };
         if is_relic {
             relics.push(di);
@@ -812,13 +829,41 @@ pub fn build_view(
     resources.extend(from_counted(&d.consumables));
     resources.extend(from_counted(&d.railjack_resources));
 
-    // Mods: unranked stacked mods
-    let mods = d.raw_upgrades.iter().map(|u| DisplayItem {
-        display_name: name_of(&u.item_type),
-        image_name: image_of(&u.item_type),
-        overlay_image_name: overlay_of(&u.item_type),
-        item_type: u.item_type.clone(),
-        count: Some(u.item_count),
+    // Mods: merge unranked stacks + individual ranked copies, grouped by item_type.
+    // count = total copies; rank = highest rank among ranked instances (0 if all unranked).
+    let mut mod_counts: std::collections::HashMap<&str, i32> = std::collections::HashMap::new();
+    let mut mod_max_rank: std::collections::HashMap<&str, i32> = std::collections::HashMap::new();
+    for u in &d.raw_upgrades {
+        *mod_counts.entry(u.item_type.as_str()).or_insert(0) += u.item_count;
+    }
+    for u in &d.ranked_mods {
+        *mod_counts.entry(u.item_type.as_str()).or_insert(0) += 1;
+        let lvl = parse_rank(u.fingerprint.as_deref());
+        let entry = mod_max_rank.entry(u.item_type.as_str()).or_insert(0);
+        if lvl > *entry { *entry = lvl; }
+    }
+    // Collect unique item_types preserving raw_upgrades order first, then any ranked-only
+    let mut seen = std::collections::HashSet::new();
+    let mut mod_types: Vec<&str> = Vec::new();
+    for u in &d.raw_upgrades {
+        if seen.insert(u.item_type.as_str()) { mod_types.push(u.item_type.as_str()); }
+    }
+    for u in &d.ranked_mods {
+        if seen.insert(u.item_type.as_str()) { mod_types.push(u.item_type.as_str()); }
+    }
+    let mods: Vec<DisplayItem> = mod_types.iter().map(|it| {
+        let count = mod_counts.get(it).copied().unwrap_or(0);
+        let rank = mod_max_rank.get(it).copied();
+        let max_rank = fusion_limits.get(*it).copied();
+        DisplayItem {
+            display_name: name_of(it),
+            image_name: image_of(it),
+            overlay_image_name: overlay_of(it),
+            item_type: it.to_string(),
+            count: Some(count),
+            rank,
+            max_rank,
+        }
     }).collect();
 
     // Blueprints
