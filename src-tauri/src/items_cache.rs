@@ -40,6 +40,8 @@ struct RawItem {
     image_name: String,
     #[serde(rename = "fusionLimit")]
     fusion_limit: Option<i32>,
+    rarity: Option<String>,
+    polarity: Option<String>,
     #[serde(default)]
     components: Vec<RawComponent>,
 }
@@ -57,6 +59,10 @@ struct ItemsFileCache {
     overlay_images: HashMap<String, String>,
     #[serde(default)]
     fusion_limits: HashMap<String, i32>,
+    #[serde(default)]
+    rarities: HashMap<String, String>,
+    #[serde(default)]
+    polarities: HashMap<String, String>,
 }
 
 // ── Public output ─────────────────────────────────────────────────────────────
@@ -68,6 +74,8 @@ pub struct ItemMaps {
     pub images: HashMap<String, String>,
     pub overlay_images: HashMap<String, String>,
     pub fusion_limits: HashMap<String, i32>,
+    pub rarities: HashMap<String, String>,
+    pub polarities: HashMap<String, String>,
 }
 
 // ── Processing ────────────────────────────────────────────────────────────────
@@ -80,6 +88,8 @@ fn build_maps(items: Vec<RawItem>) -> ItemMaps {
     let mut images = HashMap::with_capacity(cap);
     let mut overlay_images = HashMap::new();
     let mut fusion_limits: HashMap<String, i32> = HashMap::new();
+    let mut rarities: HashMap<String, String> = HashMap::new();
+    let mut polarities: HashMap<String, String> = HashMap::new();
 
     for item in items {
         // Only process recipe blueprint parts, not crafting ingredient components.
@@ -113,11 +123,17 @@ fn build_maps(items: Vec<RawItem>) -> ItemMaps {
             images.insert(item.unique_name.clone(), item.image_name);
         }
         if let Some(fl) = item.fusion_limit {
-            fusion_limits.insert(item.unique_name, fl);
+            fusion_limits.insert(item.unique_name.clone(), fl);
+        }
+        if let Some(r) = item.rarity {
+            rarities.insert(item.unique_name.clone(), r);
+        }
+        if let Some(p) = item.polarity {
+            polarities.insert(item.unique_name, p);
         }
     }
 
-    ItemMaps { names, categories, types, images, overlay_images, fusion_limits }
+    ItemMaps { names, categories, types, images, overlay_images, fusion_limits, rarities, polarities }
 }
 
 // ── Disk I/O ──────────────────────────────────────────────────────────────────
@@ -155,6 +171,8 @@ fn empty_maps() -> ItemMaps {
         images: HashMap::new(),
         overlay_images: HashMap::new(),
         fusion_limits: HashMap::new(),
+        rarities: HashMap::new(),
+        polarities: HashMap::new(),
     }
 }
 
@@ -170,6 +188,8 @@ pub async fn get_maps(app: &AppHandle) -> ItemMaps {
                 images: cache.images,
                 overlay_images: cache.overlay_images,
                 fusion_limits: cache.fusion_limits,
+                rarities: cache.rarities,
+                polarities: cache.polarities,
             };
         }
         eprintln!("[items_cache] cache expired ({age}s old), refreshing");
@@ -193,6 +213,8 @@ pub async fn get_maps(app: &AppHandle) -> ItemMaps {
         images: maps.images,
         overlay_images: maps.overlay_images,
         fusion_limits: maps.fusion_limits,
+        rarities: maps.rarities,
+        polarities: maps.polarities,
     };
     save_disk_cache(app, &cache);
     ItemMaps {
@@ -202,5 +224,7 @@ pub async fn get_maps(app: &AppHandle) -> ItemMaps {
         images: cache.images,
         overlay_images: cache.overlay_images,
         fusion_limits: cache.fusion_limits,
+        rarities: cache.rarities,
+        polarities: cache.polarities,
     }
 }

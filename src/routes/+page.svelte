@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { invoke, type InvokeArgs } from '@tauri-apps/api/core';
+  import ModCard from '$lib/components/ModCard.svelte';
 
   // ── Nav ───────────────────────────────────────────────────────────────────────
   type NavItem = 'inventory' | 'foundry' | 'dev';
@@ -16,7 +17,7 @@
   let overlayInteractive = $state(false);
 
   // ── Inventory state ───────────────────────────────────────────────────────────
-  type DisplayItem = { itemType: string; displayName: string; imageName: string; overlayImageName: string; count: number | null; rank: number | null; maxRank: number | null };
+  type DisplayItem = { itemType: string; displayName: string; imageName: string; overlayImageName: string; count: number | null; rank: number | null; maxRank: number | null; rarity: string | null; polarity: string | null };
   type InventoryView = {
     fetchedAt: number;
     warframes: DisplayItem[];
@@ -279,24 +280,7 @@
         {:else if inventoryTab === 'mods'}
           <div class="mod-grid">
             {#each items as item}
-              <div class="mod-card" title={item.displayName || item.itemType}>
-                {#if item.count !== null && item.count > 1}
-                  <span class="mod-dupe">{item.count}</span>
-                {/if}
-                {#if item.imageName}
-                  <img class="mod-img" src="/img/wf-assets/{item.imageName.replace('.png', '.avif').replace('.jpg', '.avif')}" alt={item.displayName || item.itemType} />
-                {:else}
-                  <div class="mod-img-placeholder"></div>
-                {/if}
-                {#if item.maxRank !== null && item.maxRank !== undefined && item.maxRank > 0}
-                  <div class="mod-pips">
-                    {#each { length: item.maxRank } as _, i}
-                      <div class="pip" class:filled={i < (item.rank ?? 0)}></div>
-                    {/each}
-                  </div>
-                {/if}
-                <div class="mod-name-tooltip">{item.displayName || item.itemType}</div>
-              </div>
+              <ModCard {item} />
             {/each}
           </div>
         {:else}
@@ -615,6 +599,14 @@
     padding: 4px 10px;
   }
 
+  /* ── Mod grid ── */
+  .mod-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    overflow: visible;
+  }
+
   /* ── Item grid ── */
   .item-grid {
     display: grid;
@@ -696,101 +688,6 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
     gap: 8px;
-  }
-
-  .mod-card {
-    position: relative;
-    background: #0d0f18;
-    border: 1px solid #2a2d3a;
-    border-radius: 6px;
-    padding: 6px 6px 4px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    cursor: default;
-    transition: border-color 0.15s, background 0.15s;
-    overflow: visible;
-  }
-
-  .mod-card:hover {
-    border-color: #c9a227;
-    background: #161922;
-    z-index: 10;
-  }
-
-  .mod-card:hover .mod-name-tooltip {
-    opacity: 1;
-    transform: translateY(0);
-    pointer-events: none;
-  }
-
-  .mod-dupe {
-    position: absolute;
-    top: 4px;
-    left: 4px;
-    font-size: 10px;
-    font-weight: 700;
-    color: #c9a227;
-    background: #0d0f18cc;
-    border-radius: 3px;
-    padding: 0 3px;
-    line-height: 16px;
-    z-index: 1;
-  }
-
-  .mod-img {
-    width: 100%;
-    aspect-ratio: 1;
-    object-fit: contain;
-  }
-
-  .mod-img-placeholder {
-    width: 100%;
-    aspect-ratio: 1;
-    background: #ffffff14;
-    border-radius: 4px;
-  }
-
-  .mod-pips {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 2px;
-    width: 100%;
-    min-height: 8px;
-  }
-
-  .pip {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #2a2d3a;
-    border: 1px solid #3a3d4a;
-    flex-shrink: 0;
-  }
-
-  .pip.filled {
-    background: #c9a227;
-    border-color: #e8bc30;
-  }
-
-  .mod-name-tooltip {
-    position: absolute;
-    bottom: calc(100% + 6px);
-    left: 50%;
-    transform: translateX(-50%) translateY(4px);
-    background: #1a1f2e;
-    border: 1px solid #c9a227;
-    border-radius: 6px;
-    padding: 5px 8px;
-    font-size: 11px;
-    color: #eee;
-    white-space: nowrap;
-    opacity: 0;
-    transition: opacity 0.15s, transform 0.15s;
-    pointer-events: none;
-    z-index: 100;
   }
 
   /* ── State messages ── */

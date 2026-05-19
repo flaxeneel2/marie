@@ -696,6 +696,8 @@ pub struct DisplayItem {
     pub rank: Option<i32>,
     #[serde(rename = "maxRank")]
     pub max_rank: Option<i32>,
+    pub rarity: Option<String>,
+    pub polarity: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -741,6 +743,8 @@ pub fn build_view(
     images: &std::collections::HashMap<String, String>,
     overlay_images: &std::collections::HashMap<String, String>,
     fusion_limits: &std::collections::HashMap<String, i32>,
+    rarities: &std::collections::HashMap<String, String>,
+    polarities: &std::collections::HashMap<String, String>,
 ) -> InventoryView {
     let name_of = |item_type: &str| -> String {
         let key = normalize_recipe_path(item_type);
@@ -766,6 +770,8 @@ pub fn build_view(
             count: None,
             rank: None,
             max_rank: None,
+            rarity: None,
+            polarity: None,
         }).collect()
     };
 
@@ -778,6 +784,8 @@ pub fn build_view(
             count: Some(i.item_count),
             rank: None,
             max_rank: None,
+            rarity: None,
+            polarity: None,
         }).collect()
     };
 
@@ -819,6 +827,8 @@ pub fn build_view(
             count: Some(item.item_count),
             rank: None,
             max_rank: None,
+            rarity: None,
+            polarity: None,
         };
         if is_relic {
             relics.push(di);
@@ -855,6 +865,8 @@ pub fn build_view(
         let count = mod_counts.get(it).copied().unwrap_or(0);
         let rank = mod_max_rank.get(it).copied();
         let max_rank = fusion_limits.get(*it).copied();
+        let rarity = rarities.get(*it).cloned();
+        let polarity = polarities.get(*it).cloned();
         DisplayItem {
             display_name: name_of(it),
             image_name: image_of(it),
@@ -863,6 +875,8 @@ pub fn build_view(
             count: Some(count),
             rank,
             max_rank,
+            rarity,
+            polarity,
         }
     }).collect();
 
