@@ -91,11 +91,19 @@ Serialized to `{app_data_dir}/inventory_cache.json`. TTL: 5 minutes.
 
 ```rust
 pub struct DisplayItem {
-    pub item_type: String,        // raw uniqueName path
-    pub display_name: String,     // resolved friendly name
-    pub image_name: String,       // filename e.g. "excaliburprime.avif"
-    pub overlay_image_name: String, // non-empty only for blueprint.png parts
-    pub count: Option<i32>,       // None for OwnedItems (warframes, weapons)
+    pub item_type: String,           // raw uniqueName path
+    pub display_name: String,        // resolved friendly name
+    pub image_name: String,          // filename e.g. "excaliburprime.avif"
+    pub overlay_image_name: String,  // non-empty only for blueprint.png parts
+    pub count: Option<i32>,          // None for OwnedItems (warframes, weapons)
+    pub rank: Option<i32>,           // highest rank among ranked copies (mods only)
+    pub max_rank: Option<i32>,       // fusionLimit from warframestat (mods only)
+    pub rarity: Option<String>,      // "Common" / "Uncommon" / "Rare" / "Legendary" (mods only)
+    pub polarity: Option<String>,    // "naramon" / "madurai" / … (mods only)
+    pub compat_name: Option<String>, // mod compat group e.g. "Warframe" (mods only)
+    pub description: Option<String>, // mod description text (mods only)
+    pub level_stats: Option<String>, // JSON string of levelStats array (mods only)
+    pub base_drain: Option<i32>,     // base mod drain (mods only)
 }
 
 pub struct InventoryView {
@@ -109,10 +117,20 @@ pub struct InventoryView {
 }
 ```
 
+All mod-specific fields (`rank`, `max_rank`, `rarity`, `polarity`, `compat_name`,
+`description`, `level_stats`, `base_drain`) are `None` for non-mod items.
+
+`level_stats` is serialized to a JSON string in Rust (from `serde_json::Value`);
+the frontend and the mod-card plugin parse it back as needed.
+
 #### `build_view`
 
 ```rust
-pub fn build_view(cache, names, categories, types, images, overlay_images) -> InventoryView
+pub fn build_view(
+    cache, names, categories, types, images, overlay_images,
+    fusion_limits, rarities, polarities,
+    compat_names, descriptions, level_stats, base_drains,
+) -> InventoryView
 ```
 
 Categorization rules:
@@ -123,8 +141,12 @@ Categorization rules:
 | `gear` | primaries, secondaries, melee, sentinels, sentinel_weapons, archwings, arch_guns, arch_melee, mechs, companions, amps, kaithe, railjacks, drifter_melee, plexus |
 | `relics` | `misc_items` where `types[item_type] == "Relic"` (or `categories[…] == "Relics"`) |
 | `resources` | non-relic `misc_items` + `consumables` + `railjack_resources` |
-| `mods` | `raw_upgrades` (unranked stacked mods only) |
+| `mods` | merged `raw_upgrades` (unranked stacks) + `ranked_mods` (individual ranked copies), grouped by `item_type` |
 | `blueprints` | `d.blueprints` (Recipes) |
+
+**Mod merging:** counts are summed across both sources; `rank` tracks the highest
+`lvl` found in `UpgradeFingerprint` JSON across all ranked copies (`parse_rank`
+helper). Order: `raw_upgrades` item types first, then any ranked-only types.
 
 #### `normalize_recipe_path`
 
@@ -171,8 +193,18 @@ struct ItemsFileCache {
     types:          HashMap<String, String>,  // uniqueName → item type
     images:         HashMap<String, String>,  // uniqueName → imageName (.png)
     overlay_images: HashMap<String, String>,  // uniqueName → parent imageName
+    fusion_limits:  HashMap<String, i32>,     // uniqueName → fusionLimit (mod max rank)
+    rarities:       HashMap<String, String>,  // uniqueName → rarity string
+    polarities:     HashMap<String, String>,  // uniqueName → polarity string
+    compat_names:   HashMap<String, String>,  // uniqueName → compatName
+    descriptions:   HashMap<String, String>,  // uniqueName → description
+    level_stats:    HashMap<String, String>,  // uniqueName → levelStats JSON string
+    base_drains:    HashMap<String, i32>,     // uniqueName → baseDrain
 }
 ```
+
+All fields added after the initial schema have `#[serde(default)]` so existing
+cache files deserialize without error and a fresh fetch is not forced.
 
 #### `build_maps` — component name generation
 
@@ -197,6 +229,13 @@ pub struct ItemMaps {
     pub types:          HashMap<String, String>,
     pub images:         HashMap<String, String>,
     pub overlay_images: HashMap<String, String>,
+    pub fusion_limits:  HashMap<String, i32>,
+    pub rarities:       HashMap<String, String>,
+    pub polarities:     HashMap<String, String>,
+    pub compat_names:   HashMap<String, String>,
+    pub descriptions:   HashMap<String, String>,
+    pub level_stats:    HashMap<String, String>,  // JSON strings
+    pub base_drains:    HashMap<String, i32>,
 }
 ```
 
@@ -211,11 +250,19 @@ and saves.
 import { invoke } from "@tauri-apps/api/core";
 
 interface DisplayItem {
-  itemType: string;
-  displayName: string;
-  imageName: string;         // e.g. "excaliburprime.avif" — use as /img/wf-assets/{imageName.replace('.png','.avif')}
-  overlayImageName: string;  // non-empty for main blueprint items
-  count: number | null;
+  itemType:        string;
+  displayName:     string;
+  imageName:       string;          // e.g. "excaliburprime.avif" — use as /img/wf-assets/{imageName.replace('.png','.avif')}
+  overlayImageName: string;         // non-empty for main blueprint items
+  count:           number | null;
+  rank:            number | null;   // mods only: highest rank among owned copies
+  maxRank:         number | null;   // mods only: fusionLimit from warframestat
+  rarity:          string | null;   // mods only
+  polarity:        string | null;   // mods only
+  compatName:      string | null;   // mods only
+  description:     string | null;   // mods only
+  levelStats:      string | null;   // mods only: JSON string of levelStats array
+  baseDrain:       number | null;   // mods only
 }
 
 interface InventoryView {
@@ -261,4 +308,3 @@ standard build and returns an error immediately.
 - Re-fetch on EE.log `Logged in` events (handles relog / new nonce).
 - Expose mastery XP totals for the mastery overview module.
 - Cache versioning to avoid needing manual deletion on format changes.
-- Add ranked mods (`ranked_mods`) to the mods tab.

@@ -32,4 +32,5 @@ No test infrastructure exists yet.
 - [Overlay interactivity](docs/overlay-interactivity.md) — XDG GlobalShortcuts portal, hyprctl keybind injection, GTK input shape, keybind recorder UI
 - [Memory feature](docs/memory.md) — `/proc/<pid>/mem` nonce scan, root requirement, EAC safety, account data flow
 - [Inventory feature](docs/inventory.md) — Warframe inventory API, BSON types, 5-min disk cache, items_cache (7-day TTL), DisplayItem/InventoryView pipeline, blueprint name resolution
-- [UI layout](docs/ui.md) — sidebar nav, inventory sub-tabs, relic tier filter, item image rendering
+- [Mod cards](docs/mod-cards.md) — mod-card-plugin.ts (Vite POST endpoint), @wfcd/mod-generator, genesis-assets symlinks, font fix, ModCard.svelte hover overlay
+- [UI layout](docs/ui.md) — sidebar nav, inventory sub-tabs, relic tier filter, item image rendering, mod grid

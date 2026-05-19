@@ -42,6 +42,13 @@ struct RawItem {
     fusion_limit: Option<i32>,
     rarity: Option<String>,
     polarity: Option<String>,
+    #[serde(rename = "compatName")]
+    compat_name: Option<String>,
+    description: Option<String>,
+    #[serde(rename = "levelStats")]
+    level_stats: Option<serde_json::Value>,
+    #[serde(rename = "baseDrain")]
+    base_drain: Option<i32>,
     #[serde(default)]
     components: Vec<RawComponent>,
 }
@@ -63,6 +70,14 @@ struct ItemsFileCache {
     rarities: HashMap<String, String>,
     #[serde(default)]
     polarities: HashMap<String, String>,
+    #[serde(default)]
+    compat_names: HashMap<String, String>,
+    #[serde(default)]
+    descriptions: HashMap<String, String>,
+    #[serde(default)]
+    level_stats: HashMap<String, String>,
+    #[serde(default)]
+    base_drains: HashMap<String, i32>,
 }
 
 // ── Public output ─────────────────────────────────────────────────────────────
@@ -76,6 +91,10 @@ pub struct ItemMaps {
     pub fusion_limits: HashMap<String, i32>,
     pub rarities: HashMap<String, String>,
     pub polarities: HashMap<String, String>,
+    pub compat_names: HashMap<String, String>,
+    pub descriptions: HashMap<String, String>,
+    pub level_stats: HashMap<String, String>,
+    pub base_drains: HashMap<String, i32>,
 }
 
 // ── Processing ────────────────────────────────────────────────────────────────
@@ -90,6 +109,10 @@ fn build_maps(items: Vec<RawItem>) -> ItemMaps {
     let mut fusion_limits: HashMap<String, i32> = HashMap::new();
     let mut rarities: HashMap<String, String> = HashMap::new();
     let mut polarities: HashMap<String, String> = HashMap::new();
+    let mut compat_names: HashMap<String, String> = HashMap::new();
+    let mut descriptions: HashMap<String, String> = HashMap::new();
+    let mut level_stats: HashMap<String, String> = HashMap::new();
+    let mut base_drains: HashMap<String, i32> = HashMap::new();
 
     for item in items {
         // Only process recipe blueprint parts, not crafting ingredient components.
@@ -128,12 +151,26 @@ fn build_maps(items: Vec<RawItem>) -> ItemMaps {
         if let Some(r) = item.rarity {
             rarities.insert(item.unique_name.clone(), r);
         }
+        if let Some(cn) = item.compat_name {
+            if !cn.is_empty() { compat_names.insert(item.unique_name.clone(), cn); }
+        }
+        if let Some(d) = item.description {
+            if !d.is_empty() { descriptions.insert(item.unique_name.clone(), d); }
+        }
+        if let Some(ls) = item.level_stats {
+            if let Ok(s) = serde_json::to_string(&ls) {
+                level_stats.insert(item.unique_name.clone(), s);
+            }
+        }
+        if let Some(bd) = item.base_drain {
+            base_drains.insert(item.unique_name.clone(), bd);
+        }
         if let Some(p) = item.polarity {
             polarities.insert(item.unique_name, p);
         }
     }
 
-    ItemMaps { names, categories, types, images, overlay_images, fusion_limits, rarities, polarities }
+    ItemMaps { names, categories, types, images, overlay_images, fusion_limits, rarities, polarities, compat_names, descriptions, level_stats, base_drains }
 }
 
 // ── Disk I/O ──────────────────────────────────────────────────────────────────
@@ -173,6 +210,10 @@ fn empty_maps() -> ItemMaps {
         fusion_limits: HashMap::new(),
         rarities: HashMap::new(),
         polarities: HashMap::new(),
+        compat_names: HashMap::new(),
+        descriptions: HashMap::new(),
+        level_stats: HashMap::new(),
+        base_drains: HashMap::new(),
     }
 }
 
@@ -190,6 +231,10 @@ pub async fn get_maps(app: &AppHandle) -> ItemMaps {
                 fusion_limits: cache.fusion_limits,
                 rarities: cache.rarities,
                 polarities: cache.polarities,
+                compat_names: cache.compat_names,
+                descriptions: cache.descriptions,
+                level_stats: cache.level_stats,
+                base_drains: cache.base_drains,
             };
         }
         eprintln!("[items_cache] cache expired ({age}s old), refreshing");
@@ -215,6 +260,10 @@ pub async fn get_maps(app: &AppHandle) -> ItemMaps {
         fusion_limits: maps.fusion_limits,
         rarities: maps.rarities,
         polarities: maps.polarities,
+        compat_names: maps.compat_names,
+        descriptions: maps.descriptions,
+        level_stats: maps.level_stats,
+        base_drains: maps.base_drains,
     };
     save_disk_cache(app, &cache);
     ItemMaps {
@@ -226,5 +275,9 @@ pub async fn get_maps(app: &AppHandle) -> ItemMaps {
         fusion_limits: cache.fusion_limits,
         rarities: cache.rarities,
         polarities: cache.polarities,
+        compat_names: cache.compat_names,
+        descriptions: cache.descriptions,
+        level_stats: cache.level_stats,
+        base_drains: cache.base_drains,
     }
 }

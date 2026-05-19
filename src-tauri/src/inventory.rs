@@ -698,6 +698,13 @@ pub struct DisplayItem {
     pub max_rank: Option<i32>,
     pub rarity: Option<String>,
     pub polarity: Option<String>,
+    #[serde(rename = "compatName")]
+    pub compat_name: Option<String>,
+    pub description: Option<String>,
+    #[serde(rename = "levelStats")]
+    pub level_stats: Option<String>,
+    #[serde(rename = "baseDrain")]
+    pub base_drain: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -745,6 +752,10 @@ pub fn build_view(
     fusion_limits: &std::collections::HashMap<String, i32>,
     rarities: &std::collections::HashMap<String, String>,
     polarities: &std::collections::HashMap<String, String>,
+    compat_names: &std::collections::HashMap<String, String>,
+    descriptions: &std::collections::HashMap<String, String>,
+    level_stats: &std::collections::HashMap<String, String>,
+    base_drains: &std::collections::HashMap<String, i32>,
 ) -> InventoryView {
     let name_of = |item_type: &str| -> String {
         let key = normalize_recipe_path(item_type);
@@ -772,6 +783,10 @@ pub fn build_view(
             max_rank: None,
             rarity: None,
             polarity: None,
+            compat_name: None,
+            description: None,
+            level_stats: None,
+            base_drain: None,
         }).collect()
     };
 
@@ -786,6 +801,10 @@ pub fn build_view(
             max_rank: None,
             rarity: None,
             polarity: None,
+            compat_name: None,
+            description: None,
+            level_stats: None,
+            base_drain: None,
         }).collect()
     };
 
@@ -829,6 +848,10 @@ pub fn build_view(
             max_rank: None,
             rarity: None,
             polarity: None,
+            compat_name: None,
+            description: None,
+            level_stats: None,
+            base_drain: None,
         };
         if is_relic {
             relics.push(di);
@@ -867,6 +890,10 @@ pub fn build_view(
         let max_rank = fusion_limits.get(*it).copied();
         let rarity = rarities.get(*it).cloned();
         let polarity = polarities.get(*it).cloned();
+        let compat_name = compat_names.get(*it).cloned();
+        let description = descriptions.get(*it).cloned();
+        let level_stats_val = level_stats.get(*it).cloned();
+        let base_drain = base_drains.get(*it).copied();
         DisplayItem {
             display_name: name_of(it),
             image_name: image_of(it),
@@ -877,6 +904,10 @@ pub fn build_view(
             max_rank,
             rarity,
             polarity,
+            compat_name,
+            description,
+            level_stats: level_stats_val,
+            base_drain,
         }
     }).collect();
 

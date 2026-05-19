@@ -79,6 +79,21 @@ Image path: `/img/wf-assets/{imageName.replace('.png', '.avif')}`
 Card footer shows `displayName` and `count` (count omitted for OwnedItems where
 count is `null`).
 
+### Mod grid
+
+Mods tab uses `<ModCard>` (`src/lib/components/ModCard.svelte`) instead of the
+generic card. Grid is 4 columns (`grid-template-columns: repeat(4, 1fr)`).
+
+Each `ModCard`:
+- Renders a collapsed card (256×150 px) via POST to `/api/mod-card` (Vite plugin)
+- On hover: shows a full card (256×380 px) in a `position: fixed` overlay
+- Displays a count badge (top-left) when the player owns more than one copy
+
+The POST response is a PNG blob; the component stores a `URL.createObjectURL`
+result to avoid URL-length limits from `levelStats` JSON in query strings.
+
+See [mod-cards.md](mod-cards.md) for the full rendering pipeline.
+
 ---
 
 ## Foundry tab

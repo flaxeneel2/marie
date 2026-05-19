@@ -17,7 +17,7 @@
   let overlayInteractive = $state(false);
 
   // ── Inventory state ───────────────────────────────────────────────────────────
-  type DisplayItem = { itemType: string; displayName: string; imageName: string; overlayImageName: string; count: number | null; rank: number | null; maxRank: number | null; rarity: string | null; polarity: string | null };
+  type DisplayItem = { itemType: string; displayName: string; imageName: string; overlayImageName: string; count: number | null; rank: number | null; maxRank: number | null; rarity: string | null; polarity: string | null; compatName: string | null; description: string | null; levelStats: string | null; baseDrain: number | null };
   type InventoryView = {
     fetchedAt: number;
     warframes: DisplayItem[];
@@ -684,11 +684,11 @@
   }
 
   /* ── Mod grid ── */
-  .mod-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
-    gap: 8px;
-  }
+  /*.mod-grid {*/
+  /*  display: grid;*/
+  /*  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));*/
+  /*  gap: 8px;*/
+  /*}*/
 
   /* ── State messages ── */
   .state-msg {
