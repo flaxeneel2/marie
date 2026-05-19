@@ -1,6 +1,9 @@
 <script lang="ts">
   import { generateModCard } from '$lib/mod-card';
 
+  // module-level: survives component unmount/remount (virtual scroll)
+  const _urlCache = new Map<string, string>();
+
   type ModItem = {
     itemType: string;
     displayName: string;
@@ -19,6 +22,10 @@
   let { item } = $props<{ item: ModItem }>();
 
   async function renderCard(full: boolean): Promise<string> {
+    const cacheKey = `${item.itemType}:${item.rank ?? 0}:${full ? 'f' : 't'}`;
+    const hit = _urlCache.get(cacheKey);
+    if (hit) return hit;
+
     let levelStats: unknown[] | null = null;
     if (item.levelStats) {
       try { levelStats = JSON.parse(item.levelStats); } catch { /* ignore */ }
@@ -37,11 +44,43 @@
       full,
       count: full ? null : item.count,
     });
-    return URL.createObjectURL(blob);
+    const url = URL.createObjectURL(blob);
+    _urlCache.set(cacheKey, url);
+    return url;
   }
 
-  let thumbUrl = $state<string | null>(null);
-  $effect(() => { renderCard(false).then(u => { thumbUrl = u; }).catch(() => {}); });
+  let thumbUrl = $state<string | null>(
+    _urlCache.get(`${item.itemType}:${item.rank ?? 0}:t`) ?? null
+  );
+
+  $effect(() => {
+    if (!wrapEl || thumbUrl) return;
+    let live = true;
+
+    const render = () => {
+      if (live && !thumbUrl)
+        renderCard(false).then(u => { if (live) thumbUrl = u; }).catch(() => {});
+    };
+
+    const ric = (window as Window & { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
+
+    // prioritise visible cards: IO fires early, but still defers to idle so the
+    // initial paint isn't blocked by 36 concurrent canvas renders
+    const io = new IntersectionObserver(([e]) => {
+      if (e.isIntersecting) { io.disconnect(); ric ? ric(render) : setTimeout(render, 0); }
+    }, { rootMargin: '200px' });
+    io.observe(wrapEl);
+
+    // off-screen cards also render during idle time
+    const id = ric ? ric(render) : setTimeout(render, 100);
+
+    return () => {
+      live = false;
+      io.disconnect();
+      const cic = (window as Window & { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback;
+      ric ? cic?.(id as number) : clearTimeout(id as ReturnType<typeof setTimeout>);
+    };
+  });
 
   let wrapEl    = $state<HTMLDivElement | null>(null);
   let hovering  = $state(false);

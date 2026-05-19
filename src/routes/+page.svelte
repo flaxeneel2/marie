@@ -3,6 +3,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { invoke, type InvokeArgs } from '@tauri-apps/api/core';
   import ModCard from '$lib/components/ModCard.svelte';
+  import VirtualModGrid from '$lib/components/VirtualModGrid.svelte';
 
   // ── Nav ───────────────────────────────────────────────────────────────────────
   type NavItem = 'inventory' | 'foundry' | 'dev';
@@ -31,7 +32,24 @@
   type InventoryTab = 'warframes' | 'gear' | 'relics' | 'mods' | 'resources' | 'blueprints';
   type RelicTier = 'all' | 'lith' | 'meso' | 'neo' | 'axi' | 'requiem';
   let inventoryTab = $state<InventoryTab>('warframes');
-  let relicTier = $state<RelicTier>('all');
+
+  function switchTab(id: InventoryTab) {
+    const t0 = performance.now();
+    inventoryTab = id;
+    requestAnimationFrame(() => {
+      console.log(`[tab:${id}] raf1 (svelte-mount): ${(performance.now() - t0).toFixed(1)}ms`);
+      requestAnimationFrame(() => {
+        console.log(`[tab:${id}] raf2 (paint): ${(performance.now() - t0).toFixed(1)}ms`);
+      });
+    });
+  }
+  let relicTier    = $state<RelicTier>('all');
+  let modPolarity  = $state('all');
+  const modPolarities = $derived(
+    inventoryData
+      ? ['all', ...[...new Set(inventoryData.mods.map((m: { polarity: string | null }) => m.polarity).filter(Boolean))].sort()]
+      : ['all']
+  );
   let inventoryData = $state<InventoryView | null>(null);
   let inventoryError = $state('');
   let inventoryLoading = $state(false);
@@ -61,6 +79,9 @@
         const prefix = relicTier.charAt(0).toUpperCase() + relicTier.slice(1);
         items = items.filter(i => i.displayName.startsWith(prefix));
       }
+      items.sort((a, b) => a.displayName.localeCompare(b.displayName));
+    } else if (inventoryTab === 'mods') {
+      if (modPolarity !== 'all') items = items.filter((i: { polarity: string | null }) => i.polarity === modPolarity);
       items.sort((a, b) => a.displayName.localeCompare(b.displayName));
     }
     return items;
@@ -239,7 +260,7 @@
           <button
             class="subtab"
             class:active={inventoryTab === tab.id}
-            onclick={() => (inventoryTab = tab.id as InventoryTab)}
+            onclick={() => switchTab(tab.id as InventoryTab)}
           >{tab.label}</button>
         {/each}
 
@@ -269,6 +290,18 @@
         </div>
       {/if}
 
+      {#if inventoryTab === 'mods'}
+        <div class="subtab-bar tier-bar">
+          {#each modPolarities as p}
+            <button
+              class="subtab subtab-sm"
+              class:active={modPolarity === p}
+              onclick={() => (modPolarity = p)}
+            >{p === 'all' ? 'All' : p.charAt(0).toUpperCase() + p.slice(1)}</button>
+          {/each}
+        </div>
+      {/if}
+
       {#if inventoryLoading}
         <div class="state-msg">Loading inventory…</div>
       {:else if inventoryError}
@@ -278,10 +311,8 @@
         {#if items.length === 0}
           <div class="state-msg muted">No items in this category.</div>
         {:else if inventoryTab === 'mods'}
-          <div class="mod-grid">
-            {#each items as item}
-              <ModCard {item} />
-            {/each}
+          <div class="mod-virtual-wrap">
+            <VirtualModGrid {items} />
           </div>
         {:else}
           <div class="item-grid">
@@ -512,6 +543,8 @@
     flex: 1;
     overflow-y: auto;
     padding: 24px 28px;
+    display: flex;
+    flex-direction: column;
   }
 
   .page-header {
@@ -599,12 +632,11 @@
     padding: 4px 10px;
   }
 
-  /* ── Mod grid ── */
-  .mod-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 10px;
-    overflow: visible;
+  /* ── Mod virtual wrap ── */
+  .mod-virtual-wrap {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
   }
 
   /* ── Item grid ── */
