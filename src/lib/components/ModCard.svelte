@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { generateModCard } from '$lib/mod-card';
+
   type ModItem = {
     itemType: string;
     displayName: string;
@@ -16,38 +18,30 @@
 
   let { item } = $props<{ item: ModItem }>();
 
-  async function fetchCard(full: boolean): Promise<string> {
-    const body = JSON.stringify({
-      itemType:   item.itemType,
-      imageName:  item.imageName,
-      name:       item.displayName || item.itemType,
-      rarity:     item.rarity    ?? 'Common',
-      polarity:   item.polarity  ?? 'naramon',
-      maxRank:    item.maxRank   ?? 0,
-      rank:       item.rank      ?? 0,
-      full,
+  async function renderCard(full: boolean): Promise<string> {
+    let levelStats: unknown[] | null = null;
+    if (item.levelStats) {
+      try { levelStats = JSON.parse(item.levelStats); } catch { /* ignore */ }
+    }
+    const blob = await generateModCard({
+      name:        item.displayName || item.itemType,
+      imageName:   item.imageName,
+      rarity:      item.rarity    ?? 'Common',
+      polarity:    item.polarity  ?? 'naramon',
+      fusionLimit: item.maxRank   ?? 0,
+      rank:        item.rank      ?? 0,
+      baseDrain:   item.baseDrain ?? 0,
       compatName:  item.compatName  ?? '',
       description: item.description ?? '',
-      levelStats:  item.levelStats  ?? null,
-      baseDrain:   item.baseDrain   ?? 0,
+      levelStats,
+      full,
     });
-    const resp = await fetch('/api/mod-card', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    });
-    if (!resp.ok) throw new Error(`mod-card ${resp.status}`);
-    const blob = await resp.blob();
     return URL.createObjectURL(blob);
   }
 
-  // collapsed card URL — created once on mount
   let thumbUrl = $state<string | null>(null);
-  $effect(() => {
-    fetchCard(false).then(u => { thumbUrl = u; }).catch(() => {});
-  });
+  $effect(() => { renderCard(false).then(u => { thumbUrl = u; }).catch(() => {}); });
 
-  // hover state — trigger full card render lazily
   let hovering = $state(false);
   let mouseX   = $state(0);
   let mouseY   = $state(0);
@@ -55,16 +49,10 @@
 
   function onMouseEnter(e: MouseEvent) {
     hovering = true;
-    mouseX = e.clientX;
-    mouseY = e.clientY;
-    if (!fullUrl) {
-      fetchCard(true).then(u => { fullUrl = u; }).catch(() => {});
-    }
+    mouseX = e.clientX; mouseY = e.clientY;
+    if (!fullUrl) renderCard(true).then(u => { fullUrl = u; }).catch(() => {});
   }
-  function onMouseMove(e: MouseEvent) {
-    mouseX = e.clientX;
-    mouseY = e.clientY;
-  }
+  function onMouseMove(e: MouseEvent) { mouseX = e.clientX; mouseY = e.clientY; }
 </script>
 
 <div
@@ -86,10 +74,7 @@
 {#if hovering}
   {@const above = mouseY > (typeof window !== 'undefined' ? window.innerHeight / 2 : 400)}
   {@const left  = Math.min(Math.max(mouseX - 128, 8), (typeof window !== 'undefined' ? window.innerWidth : 1280) - 264)}
-  <div
-    class="mod-hover"
-    style="left:{left}px; top:{above ? mouseY - 392 : mouseY + 12}px;"
-  >
+  <div class="mod-hover" style="left:{left}px; top:{above ? mouseY - 392 : mouseY + 12}px;">
     {#if fullUrl}
       <img src={fullUrl} alt={item.displayName} class="mod-full-img" />
     {/if}
@@ -102,13 +87,11 @@
     cursor: default;
     border-radius: 4px;
   }
-
   .mod-thumb {
     width: 100%;
     display: block;
     border-radius: 4px;
   }
-
   .mod-count {
     position: absolute;
     top: 4px;
@@ -122,7 +105,6 @@
     pointer-events: none;
     line-height: 1.4;
   }
-
   :global(.mod-hover) {
     position: fixed;
     z-index: 9999;
@@ -132,13 +114,11 @@
     animation: mod-pop 0.1s ease;
     width: 256px;
   }
-
   :global(.mod-full-img) {
     width: 100%;
     display: block;
     border-radius: 4px;
   }
-
   @keyframes mod-pop {
     from { opacity: 0; transform: scale(0.93); }
     to   { opacity: 1; transform: scale(1); }

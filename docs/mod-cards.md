@@ -1,9 +1,8 @@
 # Mod cards
 
-Renders Warframe mod cards as PNG images using `@wfcd/mod-generator` and serves
-them from a Vite dev-server middleware. All mod metadata (stats, description,
-compat name) comes from the Rust `items_cache` pipeline — no client-side API
-calls.
+Renders Warframe mod cards as PNG blobs using the browser Canvas API
+(`HTMLCanvasElement`). All metadata comes from the Rust `items_cache` pipeline.
+No server, no Node.js, works in both dev and release builds.
 
 ## Architecture
 
@@ -12,84 +11,86 @@ Rust items_cache (warframestat /items, 7-day TTL)
   └─ DisplayItem.levelStats / .description / .compatName / .baseDrain
          │
          ▼
-ModCard.svelte  ──POST /api/mod-card──▶  mod-card-plugin.ts (Vite middleware)
-  │                                            │
-  │  blob URL ◀─────────────────────────────  └─ @wfcd/mod-generator
-  ▼                                                 └─ @napi-rs/canvas
-<img src={blobUrl}>
+ModCard.svelte
+  └─ generateModCard(params)  ←  src/lib/mod-card.ts
+       │  (browser Canvas API, HTMLCanvasElement)
+       ▼
+  URL.createObjectURL(blob)
+       │
+       ▼
+  <img src={blobUrl}>
 ```
 
-## Vite plugin (`mod-card-plugin.ts`)
+## `src/lib/mod-card.ts`
 
-File lives at the project root (outside `src/`) so `svelte-check` ignores it.
-Registered in `vite.config.js` as `modCardPlugin()`.
+Browser-native port of `@wfcd/mod-generator`. Exports one function:
 
-Exposes a single endpoint: `POST /api/mod-card`
+```ts
+export async function generateModCard(params: ModCardParams): Promise<Blob>
+```
 
-### Request body (JSON)
+### `ModCardParams`
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `itemType` | string | uniqueName path — used for asset lookup only |
-| `imageName` | string | warframestat imageName e.g. `"flow.png"` |
 | `name` | string | display name |
-| `rarity` | string | `"Common"` / `"Uncommon"` / `"Rare"` / `"Legendary"` |
-| `polarity` | string | `"naramon"` / `"madurai"` / `"vazarin"` etc. |
-| `maxRank` | number | fallback when `levelStats` not present |
-| `rank` | number | current rank to render rank pips |
-| `full` | boolean | `true` → `generate()` (full card 256×380); `false` → `generateCollapsed()` (256×150) |
-| `compatName` | string | mod compat group e.g. `"Warframe"` |
-| `description` | string | mod description text |
-| `levelStats` | string \| null | JSON string of `levelStats` array from warframestat |
+| `imageName` | string | warframestat imageName e.g. `"flow.png"` — converted to local AVIF |
+| `rarity` | string | `'Common'` / `'Uncommon'` / `'Rare'` / `'Legendary'` |
+| `polarity` | string | `'naramon'` / `'madurai'` / … |
+| `fusionLimit` | number | max rank |
+| `rank` | number | current rank |
 | `baseDrain` | number | base mod drain |
+| `compatName` | string | mod compat group e.g. `"Warframe"` |
+| `description` | string | static description (used if non-empty, otherwise `levelStats` wins) |
+| `levelStats` | `unknown[] \| null` | parsed levelStats array from warframestat |
+| `full` | boolean | `true` → full card (256×380); `false` → collapsed (256×150) |
 
-### Response
+### Returns
 
-`image/png` binary, `Cache-Control: public, max-age=3600`.
+A `Blob` (`image/png`). Caller does `URL.createObjectURL(blob)` to get a usable src.
 
-### Image resolution
+### Port notes vs `@wfcd/mod-generator`
 
-The plugin looks for a local AVIF file in `static/img/wf-assets/`:
+| Original | Browser port |
+|----------|-------------|
+| `createCanvas(w, h)` | `document.createElement('canvas')` |
+| `loadImage(path)` | `new Image()` + `onload` promise |
+| `canvas.encode('png')` | `canvas.toBlob('image/png')` |
+| `new ImageData(data, w, h)` | same (browser has identical API) |
+| `GlobalFonts.registerFromPath(...)` | `FontFace` + `document.fonts.add()` via `@fontsource-variable/roboto` CSS import |
+| `canvas → encode → loadImage` roundtrip in `flip`/`shadeImage`/`drawHeader` | return `HTMLCanvasElement` directly (valid `CanvasImageSource`, no roundtrip needed) |
+| `warframe-items find.findItem(modSet)` | mod sets not supported (modSet always undefined) |
 
-```ts
-const avif = imageName.replace(/\.(png|jpg|jpeg|webp)$/i, '.avif');
-const candidate = path.join(ASSETS_DIR, avif);
-if (existsSync(candidate)) imageArg = candidate;
-```
+### Font
 
-`@napi-rs/canvas`'s `loadImage` accepts raw absolute paths (not `file://` URIs).
-If the file doesn't exist it falls back to the generator's own lookup (CDN).
-The `existsSync` check is required — passing a missing path causes `loadImage` to
-call `new URL(source)` which throws for bare Unix paths.
+`@fontsource-variable/roboto` is imported as a side-effect at the top of
+`mod-card.ts`. `ensureFont()` calls `document.fonts.load('22px "Roboto"')` once
+before any draw call to guarantee the font is ready for canvas text measurement.
 
-### Font registration
+## Asset paths
 
-`@wfcd/mod-generator`'s `registerFonts()` has a path bug: it resolves via
-`createRequire(import.meta.url)` → `require.resolve('@fontsource-variable/roboto')`
-which returns `index.css`, then navigates `../../files/…` — one directory too
-high. Fix: pre-register Roboto at the correct absolute path before any generate
-call:
-
-```ts
-const ROBOTO_WOFF2 = path.join(ROOT, 'node_modules/@fontsource-variable/roboto/files/roboto-latin-wght-normal.woff2');
-if (!GlobalFonts.has('Roboto')) GlobalFonts.registerFromPath(ROBOTO_WOFF2, 'Roboto');
-```
-
-This runs once at plugin load time (module top-level).
-
-## genesis-assets symlinks
-
-`@wfcd/mod-generator` hardcodes `./genesis-assets/` relative to CWD to find
-frame PNGs (Bronze/Silver/Gold/Legendary/Omega tiers, rank slot images, polarity
-icons). The assets are downloaded to `static/img/mod-frames/` and exposed via
-two symlinks at the project root:
+Frame PNGs and polarity icons live in `static/img/mod-frames/` and are served
+directly by the Vite/Tauri static file handler:
 
 ```
-genesis-assets/modFrames      → static/img/mod-frames/
-genesis-assets/img/polarities → static/img/mod-frames/polarities/
+/img/mod-frames/{tier}Background.png
+/img/mod-frames/{tier}CornerLights.png
+/img/mod-frames/{tier}FrameBottom.png
+/img/mod-frames/{tier}FrameTop.png
+/img/mod-frames/{tier}SideLight.png
+/img/mod-frames/{tier}TopRightBacker.png
+/img/mod-frames/{tier}LowerTab.png
+/img/mod-frames/RankSlotEmpty.png
+/img/mod-frames/RankSlotActive.png
+/img/mod-frames/RankCompleteLine.png
+/img/mod-frames/polarities/{polarity}.png
 ```
 
-These must exist for the generator to render frames and polarity icons.
+Tiers: `Bronze` / `Silver` / `Gold` / `Legendary` / `Omega` (Riven uses
+`LegendaryBackground.png`, `RivenTopRightBacker.png`, `RivenLowerTab.png`).
+
+The `genesis-assets/` symlinks at the project root are no longer needed and can
+be removed if desired.
 
 ## `ModCard.svelte`
 
