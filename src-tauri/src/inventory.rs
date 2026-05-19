@@ -680,3 +680,138 @@ pub async fn get_or_refresh_inventory(app: &AppHandle) -> Result<InventoryCache,
     Ok(cache)
 }
 
+// ── View types (sent to frontend) ────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct DisplayItem {
+    #[serde(rename = "itemType")]
+    pub item_type: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    #[serde(rename = "imageName")]
+    pub image_name: String,
+    pub count: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InventoryView {
+    #[serde(rename = "fetchedAt")]
+    pub fetched_at: u64,
+    pub warframes: Vec<DisplayItem>,
+    pub gear: Vec<DisplayItem>,
+    pub relics: Vec<DisplayItem>,
+    pub mods: Vec<DisplayItem>,
+    pub resources: Vec<DisplayItem>,
+    pub blueprints: Vec<DisplayItem>,
+}
+
+// Warframe inventory uses *Blueprint suffix for part recipes,
+// but warframestat.us indexes them under *Component uniqueNames.
+fn normalize_recipe_path(path: &str) -> std::borrow::Cow<'_, str> {
+    for (from, to) in [
+        ("SystemsBlueprint",   "SystemsComponent"),
+        ("ChassisBlueprint",   "ChassisComponent"),
+        ("HelmetBlueprint",    "HelmetComponent"),
+        ("NeuropticBlueprint", "NeuropticComponent"),
+    ] {
+        if path.contains(from) {
+            return std::borrow::Cow::Owned(path.replace(from, to));
+        }
+    }
+    std::borrow::Cow::Borrowed(path)
+}
+
+pub fn build_view(
+    cache: &InventoryCache,
+    names: &std::collections::HashMap<String, String>,
+    categories: &std::collections::HashMap<String, String>,
+    types: &std::collections::HashMap<String, String>,
+    images: &std::collections::HashMap<String, String>,
+) -> InventoryView {
+    let name_of = |item_type: &str| -> String {
+        let key = normalize_recipe_path(item_type);
+        names.get(key.as_ref()).cloned().unwrap_or_default()
+    };
+
+    let image_of = |item_type: &str| -> String {
+        let key = normalize_recipe_path(item_type);
+        images.get(key.as_ref()).cloned().unwrap_or_default()
+    };
+
+    let from_owned = |items: &[OwnedItem]| -> Vec<DisplayItem> {
+        items.iter().map(|i| DisplayItem {
+            display_name: name_of(&i.item_type),
+            image_name: image_of(&i.item_type),
+            item_type: i.item_type.clone(),
+            count: None,
+        }).collect()
+    };
+
+    let from_counted = |items: &[CountedItem]| -> Vec<DisplayItem> {
+        items.iter().map(|i| DisplayItem {
+            display_name: name_of(&i.item_type),
+            image_name: image_of(&i.item_type),
+            item_type: i.item_type.clone(),
+            count: Some(i.item_count),
+        }).collect()
+    };
+
+    let d = &cache.data;
+
+    // Warframes: own tab
+    let warframes = from_owned(&d.warframes);
+
+    // Gear: weapons, companions, archwing, mechs — everything except warframes
+    let mut gear = Vec::new();
+    gear.extend(from_owned(&d.primaries));
+    gear.extend(from_owned(&d.secondaries));
+    gear.extend(from_owned(&d.melee));
+    gear.extend(from_owned(&d.sentinels));
+    gear.extend(from_owned(&d.sentinel_weapons));
+    gear.extend(from_owned(&d.archwings));
+    gear.extend(from_owned(&d.arch_guns));
+    gear.extend(from_owned(&d.arch_melee));
+    gear.extend(from_owned(&d.mechs));
+    gear.extend(from_owned(&d.companions));
+    gear.extend(from_owned(&d.amps));
+    gear.extend(from_owned(&d.kaithe));
+    gear.extend(from_owned(&d.railjacks));
+    gear.extend(from_owned(&d.drifter_melee));
+    gear.extend(from_owned(&d.plexus));
+
+    // Relics vs resources: split misc_items by warframestat `type` field
+    let mut relics = Vec::new();
+    let mut resources = Vec::new();
+    for item in &d.misc_items {
+        let item_kind = types.get(&item.item_type).map(|s| s.as_str()).unwrap_or("");
+        let is_relic = item_kind == "Relic"
+            || categories.get(&item.item_type).map(|s| s.as_str()).unwrap_or("") == "Relics";
+        let di = DisplayItem {
+            display_name: name_of(&item.item_type),
+            image_name: image_of(&item.item_type),
+            item_type: item.item_type.clone(),
+            count: Some(item.item_count),
+        };
+        if is_relic {
+            relics.push(di);
+        } else {
+            resources.push(di);
+        }
+    }
+    resources.extend(from_counted(&d.consumables));
+    resources.extend(from_counted(&d.railjack_resources));
+
+    // Mods: unranked stacked mods
+    let mods = d.raw_upgrades.iter().map(|u| DisplayItem {
+        display_name: name_of(&u.item_type),
+        image_name: image_of(&u.item_type),
+        item_type: u.item_type.clone(),
+        count: Some(u.item_count),
+    }).collect();
+
+    // Blueprints
+    let blueprints = from_counted(&d.blueprints);
+
+    InventoryView { fetched_at: cache.fetched_at, warframes, gear, relics, mods, resources, blueprints }
+}
+

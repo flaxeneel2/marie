@@ -11,6 +11,9 @@ mod account_memory;
 #[cfg(all(feature = "memory", target_os = "linux"))]
 mod inventory;
 
+#[cfg(all(feature = "memory", target_os = "linux"))]
+mod items_cache;
+
 use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
@@ -353,8 +356,13 @@ fn get_account_info() -> Option<serde_json::Value> {
 
 #[cfg(all(feature = "memory", target_os = "linux"))]
 #[tauri::command]
-async fn get_inventory(app: AppHandle) -> Result<inventory::InventoryCache, String> {
-    inventory::get_or_refresh_inventory(&app).await
+async fn get_inventory(app: AppHandle) -> Result<inventory::InventoryView, String> {
+    let (inv_result, maps) = tokio::join!(
+        inventory::get_or_refresh_inventory(&app),
+        items_cache::get_maps(&app),
+    );
+    let cache = inv_result?;
+    Ok(inventory::build_view(&cache, &maps.names, &maps.categories, &maps.types, &maps.images))
 }
 
 #[cfg(not(all(feature = "memory", target_os = "linux")))]
