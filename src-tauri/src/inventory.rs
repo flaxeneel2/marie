@@ -690,6 +690,8 @@ pub struct DisplayItem {
     pub display_name: String,
     #[serde(rename = "imageName")]
     pub image_name: String,
+    #[serde(rename = "overlayImageName")]
+    pub overlay_image_name: String,
     pub count: Option<i32>,
 }
 
@@ -727,6 +729,7 @@ pub fn build_view(
     categories: &std::collections::HashMap<String, String>,
     types: &std::collections::HashMap<String, String>,
     images: &std::collections::HashMap<String, String>,
+    overlay_images: &std::collections::HashMap<String, String>,
 ) -> InventoryView {
     let name_of = |item_type: &str| -> String {
         let key = normalize_recipe_path(item_type);
@@ -738,10 +741,16 @@ pub fn build_view(
         images.get(key.as_ref()).cloned().unwrap_or_default()
     };
 
+    let overlay_of = |item_type: &str| -> String {
+        let key = normalize_recipe_path(item_type);
+        overlay_images.get(key.as_ref()).cloned().unwrap_or_default()
+    };
+
     let from_owned = |items: &[OwnedItem]| -> Vec<DisplayItem> {
         items.iter().map(|i| DisplayItem {
             display_name: name_of(&i.item_type),
             image_name: image_of(&i.item_type),
+            overlay_image_name: overlay_of(&i.item_type),
             item_type: i.item_type.clone(),
             count: None,
         }).collect()
@@ -751,6 +760,7 @@ pub fn build_view(
         items.iter().map(|i| DisplayItem {
             display_name: name_of(&i.item_type),
             image_name: image_of(&i.item_type),
+            overlay_image_name: overlay_of(&i.item_type),
             item_type: i.item_type.clone(),
             count: Some(i.item_count),
         }).collect()
@@ -789,6 +799,7 @@ pub fn build_view(
         let di = DisplayItem {
             display_name: name_of(&item.item_type),
             image_name: image_of(&item.item_type),
+            overlay_image_name: overlay_of(&item.item_type),
             item_type: item.item_type.clone(),
             count: Some(item.item_count),
         };
@@ -805,6 +816,7 @@ pub fn build_view(
     let mods = d.raw_upgrades.iter().map(|u| DisplayItem {
         display_name: name_of(&u.item_type),
         image_name: image_of(&u.item_type),
+        overlay_image_name: overlay_of(&u.item_type),
         item_type: u.item_type.clone(),
         count: Some(u.item_count),
     }).collect();

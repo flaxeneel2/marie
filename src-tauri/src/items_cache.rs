@@ -51,6 +51,8 @@ struct ItemsFileCache {
     categories: HashMap<String, String>,
     types: HashMap<String, String>,
     images: HashMap<String, String>,
+    // For recipe components: the parent item's imageName to overlay on the blueprint bg
+    overlay_images: HashMap<String, String>,
 }
 
 // ── Public output ─────────────────────────────────────────────────────────────
@@ -60,6 +62,7 @@ pub struct ItemMaps {
     pub categories: HashMap<String, String>,
     pub types: HashMap<String, String>,
     pub images: HashMap<String, String>,
+    pub overlay_images: HashMap<String, String>,
 }
 
 // ── Processing ────────────────────────────────────────────────────────────────
@@ -70,6 +73,7 @@ fn build_maps(items: Vec<RawItem>) -> ItemMaps {
     let mut categories = HashMap::with_capacity(cap);
     let mut types = HashMap::with_capacity(cap);
     let mut images = HashMap::with_capacity(cap);
+    let mut overlay_images = HashMap::new();
 
     for item in items {
         // Only process recipe blueprint parts, not crafting ingredient components.
@@ -90,6 +94,10 @@ fn build_maps(items: Vec<RawItem>) -> ItemMaps {
             if !comp.image_name.is_empty() {
                 images.insert(comp.unique_name.clone(), comp.image_name.clone());
             }
+            // Only overlay parent image when component itself is the generic blueprint.png
+            if comp.image_name == "blueprint.png" && !item.image_name.is_empty() {
+                overlay_images.insert(comp.unique_name.clone(), item.image_name.clone());
+            }
         }
 
         names.insert(item.unique_name.clone(), item.name);
@@ -100,7 +108,7 @@ fn build_maps(items: Vec<RawItem>) -> ItemMaps {
         }
     }
 
-    ItemMaps { names, categories, types, images }
+    ItemMaps { names, categories, types, images, overlay_images }
 }
 
 // ── Disk I/O ──────────────────────────────────────────────────────────────────
@@ -136,6 +144,7 @@ fn empty_maps() -> ItemMaps {
         categories: HashMap::new(),
         types: HashMap::new(),
         images: HashMap::new(),
+        overlay_images: HashMap::new(),
     }
 }
 
@@ -149,6 +158,7 @@ pub async fn get_maps(app: &AppHandle) -> ItemMaps {
                 categories: cache.categories,
                 types: cache.types,
                 images: cache.images,
+                overlay_images: cache.overlay_images,
             };
         }
         eprintln!("[items_cache] cache expired ({age}s old), refreshing");
@@ -170,6 +180,7 @@ pub async fn get_maps(app: &AppHandle) -> ItemMaps {
         categories: maps.categories,
         types: maps.types,
         images: maps.images,
+        overlay_images: maps.overlay_images,
     };
     save_disk_cache(app, &cache);
     ItemMaps {
@@ -177,5 +188,6 @@ pub async fn get_maps(app: &AppHandle) -> ItemMaps {
         categories: cache.categories,
         types: cache.types,
         images: cache.images,
+        overlay_images: cache.overlay_images,
     }
 }

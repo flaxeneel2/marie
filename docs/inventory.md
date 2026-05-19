@@ -1,31 +1,47 @@
 # Inventory feature (`--features memory`)
 
-Fetches the player's full account inventory from the Warframe API and caches it
-on disk. Requires the `memory` feature (Linux only) because it uses the nonce
-extracted from process memory to authenticate the request.
+Fetches the player's full account inventory from the Warframe API, resolves
+`uniqueName` paths to friendly display names via a warframestat.us items cache,
+and returns a categorized `InventoryView` to the frontend.
 
-## API endpoint
+Requires the `memory` feature (Linux only) — needs the nonce from
+`account_memory`. See [memory.md](memory.md).
+
+## Pipeline overview
 
 ```
-GET https://api.warframe.com/api/inventory.php?accountId={account_id}&nonce={nonce}
+/proc/<pid>/mem scan
+  └─ nonce + account_id (ACCOUNT_INFO)
+         │
+         ▼
+inventory::get_or_refresh_inventory
+  └─ GET https://api.warframe.com/api/inventory.php?accountId=…&nonce=…
+  └─ {app_data_dir}/inventory_cache.json  (5-min TTL)
+         │
+         ▼
+items_cache::get_maps
+  └─ GET https://api.warframestat.us/items/?remove=patchlogs,introduced
+  └─ {app_data_dir}/items_name_cache.json  (7-day TTL)
+         │
+         ▼
+inventory::build_view  (InventoryCache × ItemMaps → InventoryView)
+         │
+         ▼
+Tauri command get_inventory → frontend DisplayItem[]
 ```
 
-Both parameters come from `account_memory::ACCOUNT_INFO`, populated at startup
-by the privileged child's `ScanAccount` scan. See [memory.md](memory.md).
+## Rust modules
 
-The response is a large JSON object using MongoDB BSON conventions — dates as
-`{"$date":{"$numberLong":"<ms>"}}`, OIDs as `{"$oid":"<hex>"}`.
+### `src-tauri/src/inventory.rs`
 
-## Rust module — `src-tauri/src/inventory.rs`
-
-### BSON primitives
+#### BSON primitives
 
 | Type | JSON shape | Helper |
 |------|-----------|--------|
 | `MongoOid` | `{"$oid":"…"}` | `.oid: String` |
 | `MongoDate` | `{"$date":{"$numberLong":"…"}}` | `.as_unix_ms() -> Option<i64>` |
 
-### Shared item types
+#### Shared item types
 
 | Type | Fields | Used for |
 |------|--------|---------|
@@ -34,122 +50,215 @@ The response is a large JSON object using MongoDB BSON conventions — dates as
 | `XpEntry` | `item_type`, `xp` | Per-item mastery XP (`XPInfo` array) |
 | `RawUpgrade` | `item_type`, `item_count`, `last_added` | Unranked mod stacks |
 | `Upgrade` | `item_type`, `item_id`, `fingerprint` | Ranked mod instances |
-| `OwnedItem` | `item_type`, `item_id`, `xp`, `upgrade_ver`, `features`, `infestation_date`, `configs`, `modular_parts` | All gear (warframes, weapons, sentinels, etc.) |
+| `OwnedItem` | `item_type`, `item_id`, `xp`, `upgrade_ver`, `features`, `infestation_date`, `configs`, `modular_parts` | Gear (warframes, weapons, sentinels, …) |
 | `FusionTreasure` | `item_type`, `item_count`, `sockets` | Primed mod materials |
 
-### Domain types
+#### `Inventory` struct
 
-| Type | Purpose |
-|------|---------|
-| `Affiliation` | Syndicate standing (`tag`, `standing`, `initiated`, `title`) |
-| `Booster` | Active booster (`item_type`, `expiry: i64` unix seconds) |
-| `QuestKey` | Quest state (`unlock`, `completed`, `progress`) |
-| `PendingRecipe` | In-progress foundry build (`item_type`, `completion_date`, `item_id`) |
-| `MissionEntry` | Node completion count (`tag`, `completes`, `tier`) |
-| `FocusXp` | Focus school XP (`power`, `attack`, `tactic`, `ward`, `defense`) |
-| `AlignmentData` | Tenno alignment (`alignment`, `wisdom`) |
-| `DuviriInfo` | Duviri state (`seed`, `completions`, `stalker_chance`) |
-| `PlayerSettings` | Account privacy settings |
-| `ChallengeProgress` | Nightwave / challenge progress |
-
-### `Inventory` struct
-
-Top-level struct with `#[serde(default)]` on all array/scalar fields so missing
-keys never fail parsing. Opaque nested objects (loadout presets, nemesis,
-helminth, etc.) are typed as `serde_json::Value` to avoid maintenance burden.
+Top-level struct with `#[serde(default)]` on all fields. Opaque nested objects
+(loadout presets, nemesis, helminth, etc.) are typed as `serde_json::Value`.
 
 Key field groups:
 
-| Group | Fields |
-|-------|--------|
-| Currency | `credits`, `platinum`, `platinum_free`, `endo`, `prime_tokens` |
+| Group | Notable fields |
+|-------|---------------|
+| Currency | `credits`, `platinum`, `endo`, `prime_tokens` |
 | Mastery | `mastery_rank`, `xp_info`, `daily_focus` |
-| Trading | `trades_remaining`, `gifts_remaining` |
-| Slot bins | `suit_bin`, `weapon_bin`, `sentinel_bin`, `archwing_bin`, … |
-| Gear arrays | `warframes`, `primaries`, `secondaries`, `melee`, `sentinels`, `archwings`, `mechs`, `amps`, … |
-| Mods | `raw_upgrades`, `ranked_mods` |
-| Resources | `misc_items`, `consumables`, `fusion_treasures`, `blueprints`, `pending_recipes` |
+| Gear arrays | `warframes` (Suits), `primaries` (LongGuns), `secondaries` (Pistols), `melee`, `sentinels`, `archwings`, `mechs`, `amps`, `companions`, `kaithe`, `railjacks`, … |
+| Mods | `raw_upgrades` (unranked stacks), `ranked_mods` (Upgrades) |
+| Resources | `misc_items` (MiscItems), `consumables`, `fusion_treasures`, `railjack_resources` |
+| Foundry | `blueprints` (Recipes), `pending_recipes` |
 | Social | `affiliations`, `boosters`, `quests`, `missions` |
-| Focus | `focus_xp`, `focus_ability` |
 
-## Cache
-
-### `InventoryCache`
+#### `InventoryCache`
 
 ```rust
 pub struct InventoryCache {
-    pub fetched_at: u64,   // Unix seconds (std::time::SystemTime)
+    pub fetched_at: u64,   // Unix seconds
     pub data: Inventory,
 }
 ```
 
-Serialized to / deserialized from `{app_data_dir}/inventory_cache.json` using
-serde_json.
-
-### TTL — 5 minutes
+Serialized to `{app_data_dir}/inventory_cache.json`. TTL: 5 minutes.
 
 `get_or_refresh_inventory` logic:
+1. Load `inventory_cache.json`; return if `now − fetched_at < 300s`.
+2. Read `account_id` + `nonce` from `ACCOUNT_INFO`.
+3. `GET /api/inventory.php?accountId=…&nonce=…` via reqwest.
+4. Write new `InventoryCache` to disk and return.
 
-1. Try to load `inventory_cache.json` from disk.
-2. If cache exists and `now - fetched_at < 300s` → return cached data, no HTTP.
-3. Otherwise:
-   a. Read `account_id` and `nonce` from `ACCOUNT_INFO` (error if missing).
-   b. `GET` the inventory endpoint via `reqwest`.
-   c. Parse response into `Inventory`.
-   d. Write new `InventoryCache` to disk.
-   e. Return fresh cache.
+#### View types (sent to frontend)
 
-Cache file is written atomically via `fs::write` (single syscall on Linux).
+```rust
+pub struct DisplayItem {
+    pub item_type: String,        // raw uniqueName path
+    pub display_name: String,     // resolved friendly name
+    pub image_name: String,       // filename e.g. "excaliburprime.avif"
+    pub overlay_image_name: String, // non-empty only for blueprint.png parts
+    pub count: Option<i32>,       // None for OwnedItems (warframes, weapons)
+}
+
+pub struct InventoryView {
+    pub fetched_at: u64,
+    pub warframes: Vec<DisplayItem>,
+    pub gear: Vec<DisplayItem>,
+    pub relics: Vec<DisplayItem>,
+    pub mods: Vec<DisplayItem>,
+    pub resources: Vec<DisplayItem>,
+    pub blueprints: Vec<DisplayItem>,
+}
+```
+
+#### `build_view`
+
+```rust
+pub fn build_view(cache, names, categories, types, images, overlay_images) -> InventoryView
+```
+
+Categorization rules:
+
+| Tab | Source |
+|-----|--------|
+| `warframes` | `d.warframes` (Suits) |
+| `gear` | primaries, secondaries, melee, sentinels, sentinel_weapons, archwings, arch_guns, arch_melee, mechs, companions, amps, kaithe, railjacks, drifter_melee, plexus |
+| `relics` | `misc_items` where `types[item_type] == "Relic"` (or `categories[…] == "Relics"`) |
+| `resources` | non-relic `misc_items` + `consumables` + `railjack_resources` |
+| `mods` | `raw_upgrades` (unranked stacked mods only) |
+| `blueprints` | `d.blueprints` (Recipes) |
+
+#### `normalize_recipe_path`
+
+Warframe inventory uses `*Blueprint` suffix for part recipes, but warframestat
+indexes them under `*Component`. A lookup table patches these before map lookup:
+
+| Inventory path suffix | Lookup suffix |
+|----------------------|--------------|
+| `SystemsBlueprint` | `SystemsComponent` |
+| `ChassisBlueprint` | `ChassisComponent` |
+| `HelmetBlueprint` | `HelmetComponent` |
+| `NeuropticBlueprint` | `NeuropticComponent` |
+
+---
+
+### `src-tauri/src/items_cache.rs`
+
+Fetches and caches item metadata from warframestat.us to resolve `uniqueName`
+paths to display names, images, and overlay images.
+
+#### API
+
+```
+GET https://api.warframestat.us/items/?remove=patchlogs,introduced
+```
+
+Returns an array of items including a `components` array for each item. The
+`components` field is included (not removed) so blueprint part names can be
+derived from the parent item name.
+
+#### Disk cache
+
+File: `{app_data_dir}/items_name_cache.json`  
+TTL: 7 days (604 800 s)
+
+Format stores processed maps (not raw items), so format changes automatically
+invalidate old caches via serde parse failure.
+
+```rust
+struct ItemsFileCache {
+    fetched_at: u64,
+    names:          HashMap<String, String>,  // uniqueName → display name
+    categories:     HashMap<String, String>,  // uniqueName → category
+    types:          HashMap<String, String>,  // uniqueName → item type
+    images:         HashMap<String, String>,  // uniqueName → imageName (.png)
+    overlay_images: HashMap<String, String>,  // uniqueName → parent imageName
+}
+```
+
+#### `build_maps` — component name generation
+
+For each item, components are processed **only** when their `uniqueName` starts
+with `/Lotus/Types/Recipes/` (crafting ingredient components share uniqueNames
+with top-level items and must not be overwritten).
+
+Name generated:
+- `comp.name == "Blueprint"` → `"{parent.name} Blueprint"`
+- otherwise → `"{parent.name} {comp.name} Blueprint"`
+
+Overlay image rule: `overlay_images[comp.uniqueName] = parent.imageName` **only
+when** `comp.imageName == "blueprint.png"`. Component parts (Chassis, Systems,
+Neuroptics) have their own distinct images and do not get an overlay.
+
+#### `pub struct ItemMaps`
+
+```rust
+pub struct ItemMaps {
+    pub names:          HashMap<String, String>,
+    pub categories:     HashMap<String, String>,
+    pub types:          HashMap<String, String>,
+    pub images:         HashMap<String, String>,
+    pub overlay_images: HashMap<String, String>,
+}
+```
+
+`get_maps(app) -> ItemMaps` — returns from disk cache if valid, otherwise fetches
+and saves.
+
+---
 
 ## Tauri command
 
 ```ts
 import { invoke } from "@tauri-apps/api/core";
 
-interface InventoryCache {
-  fetched_at: number;           // Unix seconds
-  data: Inventory;              // full inventory object
+interface DisplayItem {
+  itemType: string;
+  displayName: string;
+  imageName: string;         // e.g. "excaliburprime.avif" — use as /img/wf-assets/{imageName.replace('.png','.avif')}
+  overlayImageName: string;  // non-empty for main blueprint items
+  count: number | null;
 }
 
-const cache = await invoke<InventoryCache>("get_inventory");
+interface InventoryView {
+  fetchedAt: number;
+  warframes: DisplayItem[];
+  gear: DisplayItem[];
+  relics: DisplayItem[];
+  mods: DisplayItem[];
+  resources: DisplayItem[];
+  blueprints: DisplayItem[];
+}
+
+const view = await invoke<InventoryView>("get_inventory");
 ```
 
-Returns an error string in the standard (non-memory) build or when the game
-is not running / nonce was not found.
+`get_inventory` runs `get_or_refresh_inventory` and `items_cache::get_maps` in
+parallel via `tokio::join!`, then calls `build_view`.
 
-## Integration with memory pipeline
+Returns an error string when the memory feature is unavailable, the game is not
+running, or the nonce was not found.
 
+## Item images
+
+Images live in `static/img/wf-assets/` as `.avif` files. The `imageName` field
+from warframestat ends in `.png`; replace with `.avif` to get the asset path:
+
+```ts
+`/img/wf-assets/${item.imageName.replace('.png', '.avif')}`
 ```
-EE.log
-  └─ account_id, username
-         │
-         ▼
-/proc/<pid>/mem scan
-  └─ nonce
-         │
-         ▼
-ACCOUNT_INFO (Mutex<Option<AccountInfo>>)
-         │
-         ▼
-inventory::get_or_refresh_inventory
-  └─ GET /api/inventory.php?accountId=…&nonce=…
-         │
-         ▼
-{app_data_dir}/inventory_cache.json
-         │
-         ▼
-Tauri frontend (get_inventory command)
-```
+
+Blueprint items where `overlayImageName` is non-empty render as a stack: the
+generic `blueprint.avif` base with the parent item's image inset on top (CSS
+`position: absolute`, `inset: 10%`, `object-fit: contain`).
 
 ## Feature flag
 
-The entire `inventory` module is compiled only when `--features memory` is set
-(same gate as `account_memory`). The `get_inventory` Tauri command always exists
-in both builds — the standard build stub returns an error immediately so the
-frontend can handle it gracefully.
+The `inventory` and `items_cache` modules are compiled only under
+`--features memory`. The `get_inventory` Tauri command always exists in the
+standard build and returns an error immediately.
 
 ## Future work
 
 - Re-fetch on EE.log `Logged in` events (handles relog / new nonce).
-- Expose mastery XP totals to the UI for the mastery overview module.
-- Incremental cache invalidation using `LastInventorySync` OID.
+- Expose mastery XP totals for the mastery overview module.
+- Cache versioning to avoid needing manual deletion on format changes.
+- Add ranked mods (`ranked_mods`) to the mods tab.

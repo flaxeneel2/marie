@@ -16,7 +16,7 @@
   let overlayInteractive = $state(false);
 
   // ── Inventory state ───────────────────────────────────────────────────────────
-  type DisplayItem = { itemType: string; displayName: string; imageName: string; count: number | null };
+  type DisplayItem = { itemType: string; displayName: string; imageName: string; overlayImageName: string; count: number | null };
   type InventoryView = {
     fetchedAt: number;
     warframes: DisplayItem[];
@@ -28,7 +28,9 @@
   };
 
   type InventoryTab = 'warframes' | 'gear' | 'relics' | 'mods' | 'resources' | 'blueprints';
+  type RelicTier = 'all' | 'lith' | 'meso' | 'neo' | 'axi' | 'requiem';
   let inventoryTab = $state<InventoryTab>('warframes');
+  let relicTier = $state<RelicTier>('all');
   let inventoryData = $state<InventoryView | null>(null);
   let inventoryError = $state('');
   let inventoryLoading = $state(false);
@@ -52,7 +54,15 @@
 
   function currentItems(): DisplayItem[] {
     if (!inventoryData) return [];
-    return inventoryData[inventoryTab] ?? [];
+    let items = [...(inventoryData[inventoryTab] ?? [])];
+    if (inventoryTab === 'relics') {
+      if (relicTier !== 'all') {
+        const prefix = relicTier.charAt(0).toUpperCase() + relicTier.slice(1);
+        items = items.filter(i => i.displayName.startsWith(prefix));
+      }
+      items.sort((a, b) => a.displayName.localeCompare(b.displayName));
+    }
+    return items;
   }
 
   // ── Dev tab helpers ───────────────────────────────────────────────────────────
@@ -239,6 +249,25 @@
         >↻</button>
       </div>
 
+      {#if inventoryTab === 'relics'}
+        <div class="subtab-bar tier-bar">
+          {#each [
+            { id: 'all',     label: 'All' },
+            { id: 'lith',    label: 'Lith' },
+            { id: 'meso',    label: 'Meso' },
+            { id: 'neo',     label: 'Neo' },
+            { id: 'axi',     label: 'Axi' },
+            { id: 'requiem', label: 'Requiem' },
+          ] as tier}
+            <button
+              class="subtab subtab-sm"
+              class:active={relicTier === tier.id}
+              onclick={() => (relicTier = tier.id as RelicTier)}
+            >{tier.label}</button>
+          {/each}
+        </div>
+      {/if}
+
       {#if inventoryLoading}
         <div class="state-msg">Loading inventory…</div>
       {:else if inventoryError}
@@ -251,7 +280,12 @@
           <div class="item-grid">
             {#each items as item}
               <div class="item-card">
-                {#if item.imageName}
+                {#if item.overlayImageName}
+                  <div class="item-img-stack">
+                    <img class="item-img" src="/img/wf-assets/{item.imageName.replace('.png', '.avif')}" alt="" />
+                    <img class="item-img-overlay" src="/img/wf-assets/{item.overlayImageName.replace('.png', '.avif')}" alt={item.displayName || item.itemType} />
+                  </div>
+                {:else if item.imageName}
                   <img
                     class="item-img"
                     src="/img/wf-assets/{item.imageName.replace('.png', '.avif')}"
@@ -548,6 +582,16 @@
     padding: 4px 10px;
   }
 
+  .tier-bar {
+    margin-top: -12px;
+    margin-bottom: 12px;
+  }
+
+  .subtab-sm {
+    font-size: 11px;
+    padding: 4px 10px;
+  }
+
   /* ── Item grid ── */
   .item-grid {
     display: grid;
@@ -571,6 +615,30 @@
     object-fit: contain;
     border-radius: 6px;
     background: #ffffff08;
+  }
+
+  .item-img-stack {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 6px;
+    background: #ffffff08;
+  }
+
+  .item-img-stack .item-img {
+    position: absolute;
+    inset: 0;
+    border-radius: 6px;
+    opacity: 0.5;
+    background: transparent;
+  }
+
+  .item-img-overlay {
+    position: absolute;
+    inset: 10%;
+    width: 80%;
+    height: 80%;
+    object-fit: contain;
   }
 
   .item-img-placeholder {

@@ -362,7 +362,7 @@ async fn get_inventory(app: AppHandle) -> Result<inventory::InventoryView, Strin
         items_cache::get_maps(&app),
     );
     let cache = inv_result?;
-    Ok(inventory::build_view(&cache, &maps.names, &maps.categories, &maps.types, &maps.images))
+    Ok(inventory::build_view(&cache, &maps.names, &maps.categories, &maps.types, &maps.images, &maps.overlay_images))
 }
 
 #[cfg(not(all(feature = "memory", target_os = "linux")))]
