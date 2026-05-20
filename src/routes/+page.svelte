@@ -43,11 +43,23 @@
       });
     });
   }
-  let relicTier    = $state<RelicTier>('all');
-  let modPolarity  = $state('all');
+  let relicTier   = $state<RelicTier>('all');
+  let modPolarity = $state('all');
+  let modRarity   = $state('all');
+  let modSearch   = $state('');
+  let modSort     = $state<'name' | 'owned' | 'cost'>('name');
+  let modSortDir  = $state<'asc' | 'desc'>('asc');
+
+  const RARITY_ORDER = ['Common', 'Uncommon', 'Rare', 'Legendary'];
   const modPolarities = $derived(
     inventoryData
-      ? ['all', ...[...new Set(inventoryData.mods.map((m: { polarity: string | null }) => m.polarity).filter(Boolean))].sort()]
+      ? ['all', ...[...new Set(inventoryData.mods.map((m: DisplayItem) => m.polarity).filter(Boolean))].sort()]
+      : ['all']
+  );
+  const modRarities = $derived(
+    inventoryData
+      ? ['all', ...[...new Set(inventoryData.mods.map((m: DisplayItem) => m.rarity).filter(Boolean))]
+          .sort((a, b) => RARITY_ORDER.indexOf(a) - RARITY_ORDER.indexOf(b))]
       : ['all']
   );
   let inventoryData = $state<InventoryView | null>(null);
@@ -81,8 +93,19 @@
       }
       items.sort((a, b) => a.displayName.localeCompare(b.displayName));
     } else if (inventoryTab === 'mods') {
-      if (modPolarity !== 'all') items = items.filter((i: { polarity: string | null }) => i.polarity === modPolarity);
-      items.sort((a, b) => a.displayName.localeCompare(b.displayName));
+      if (modPolarity !== 'all') items = items.filter(i => i.polarity === modPolarity);
+      if (modRarity   !== 'all') items = items.filter(i => i.rarity   === modRarity);
+      if (modSearch.trim()) {
+        const q = modSearch.trim().toLowerCase();
+        items = items.filter(i => i.displayName.toLowerCase().includes(q));
+      }
+      items.sort((a, b) => {
+        let cmp = 0;
+        if (modSort === 'name')  cmp = a.displayName.localeCompare(b.displayName);
+        if (modSort === 'owned') cmp = (a.count ?? 0) - (b.count ?? 0);
+        if (modSort === 'cost')  cmp = (Math.abs(a.baseDrain ?? 0) + (a.rank ?? 0)) - (Math.abs(b.baseDrain ?? 0) + (b.rank ?? 0));
+        return modSortDir === 'asc' ? cmp : -cmp;
+      });
     }
     return items;
   }
@@ -291,6 +314,26 @@
       {/if}
 
       {#if inventoryTab === 'mods'}
+        <div class="mod-filter-bar">
+          <input
+            class="mod-search"
+            type="search"
+            placeholder="Search…"
+            bind:value={modSearch}
+          />
+          <div class="mod-sort-group">
+            {#each ([['name','Name'],['owned','Owned'],['cost','Cost']] as const) as [id, label]}
+              <button
+                class="subtab subtab-sm"
+                class:active={modSort === id}
+                onclick={() => {
+                  if (modSort === id) modSortDir = modSortDir === 'asc' ? 'desc' : 'asc';
+                  else { modSort = id; modSortDir = 'asc'; }
+                }}
+              >{label}{modSort === id ? (modSortDir === 'asc' ? ' ↑' : ' ↓') : ''}</button>
+            {/each}
+          </div>
+        </div>
         <div class="subtab-bar tier-bar">
           {#each modPolarities as p}
             <button
@@ -298,6 +341,15 @@
               class:active={modPolarity === p}
               onclick={() => (modPolarity = p)}
             >{p === 'all' ? 'All' : p.charAt(0).toUpperCase() + p.slice(1)}</button>
+          {/each}
+        </div>
+        <div class="subtab-bar tier-bar">
+          {#each modRarities as r}
+            <button
+              class="subtab subtab-sm"
+              class:active={modRarity === r}
+              onclick={() => (modRarity = r)}
+            >{r === 'all' ? 'All' : r}</button>
           {/each}
         </div>
       {/if}
@@ -623,7 +675,7 @@
   }
 
   .tier-bar {
-    margin-top: -12px;
+    /*margin-top: -12px;*/
     margin-bottom: 12px;
   }
 
@@ -638,6 +690,27 @@
     min-height: 0;
     overflow: hidden;
   }
+
+  /* ── Mod filters ── */
+  .mod-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .mod-search {
+    flex: 1;
+    max-width: 220px;
+    background: #161922;
+    border: 1px solid #2a2d3a;
+    border-radius: 6px;
+    padding: 4px 10px;
+    color: #e0e0e0;
+    font-size: 13px;
+    outline: none;
+  }
+  .mod-search:focus { border-color: #4a5070; }
+  .mod-sort-group { display: flex; gap: 4px; }
 
   /* ── Item grid ── */
   .item-grid {
