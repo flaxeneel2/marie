@@ -21,17 +21,9 @@ use std::sync::Mutex;
 // Response: [u8 status] [u16le body_len] [body bytes]
 
 const REQ_SCAN_ACCOUNT: u8 = 0x01;
-const REQ_READ_LOG_BUFFER: u8 = 0x02;
 
 const RESP_OK: u8 = 0x00;
 const RESP_ERR: u8 = 0x01;
-
-// Fixed virtual addresses for the EE.log in-memory ring buffer.
-// Position pointer holds the absolute write-head address (u64le).
-pub const LOG_POS_ADDR: u64 = 0x1428594D0;
-pub const LOG_START_ADDR: u64 = 0x589150;
-pub const LOG_END_ADDR: u64 = 0x58A14F;
-pub const LOG_BUF_SIZE: usize = (LOG_END_ADDR - LOG_START_ADDR) as usize; // 4640
 
 fn write_request(sock: &mut UnixStream, tag: u8, payload: &[u8]) -> std::io::Result<()> {
     debug_assert!(payload.len() <= 255);
@@ -69,24 +61,8 @@ pub struct AccountInfo {
 pub static ACCOUNT_INFO: Lazy<Mutex<Option<AccountInfo>>> = Lazy::new(|| Mutex::new(None));
 
 /// Persistent connection to the privileged child. Available for future requests
-/// (e.g. ReadLogBuffer) after the initial startup scan.
+/// after the initial startup scan.
 static CHILD_SOCK: Lazy<Mutex<Option<UnixStream>>> = Lazy::new(|| Mutex::new(None));
-
-/// Read the EE.log in-memory buffer from the child process.
-/// Returns `[u64le write-head address][LOG_BUF_SIZE bytes]` on success.
-pub fn read_log_buffer() -> Option<Vec<u8>> {
-    let mut guard = CHILD_SOCK.lock().unwrap();
-    let sock = guard.as_mut()?;
-    if let Err(e) = write_request(sock, REQ_READ_LOG_BUFFER, &[]) {
-        eprintln!("[memory] send REQ_READ_LOG_BUFFER: {e}");
-        return None;
-    }
-    match read_response(sock) {
-        Ok(Ok(body)) => Some(body),
-        Ok(Err(e)) => { eprintln!("[memory] log buffer child error: {e}"); None }
-        Err(e) => { eprintln!("[memory] log buffer recv: {e}"); None }
-    }
-}
 
 // ── Parent: entry point ───────────────────────────────────────────────────────
 
@@ -396,27 +372,6 @@ fn child_send_response(fd: i32, status: u8, body: &[u8]) -> bool {
     fd_write_all(fd, &hdr) && fd_write_all(fd, body)
 }
 
-fn handle_read_log_buffer(pid: u32) -> Result<Vec<u8>, String> {
-    if !pid_is_warframe(pid) {
-        return Err(format!("PID {pid} no longer Warframe"));
-    }
-    let mem_file = fs::File::open(format!("/proc/{pid}/mem"))
-        .map_err(|e| format!("open /proc/{pid}/mem: {e}"))?;
-
-    let mut pos_bytes = [0u8; 8];
-    mem_file.read_at(&mut pos_bytes, LOG_POS_ADDR)
-        .map_err(|e| format!("read pos @ {:#x}: {e}", LOG_POS_ADDR))?;
-
-    let mut log_buf = vec![0u8; LOG_BUF_SIZE];
-    mem_file.read_at(&mut log_buf, LOG_START_ADDR)
-        .map_err(|e| format!("read log buf @ {:#x}: {e}", LOG_START_ADDR))?;
-
-    let mut out = Vec::with_capacity(8 + LOG_BUF_SIZE);
-    out.extend_from_slice(&pos_bytes);
-    out.extend_from_slice(&log_buf);
-    Ok(out)
-}
-
 // ── Child: main loop ──────────────────────────────────────────────────────────
 
 fn child_main(sock: UnixStream) -> ! {
@@ -460,18 +415,6 @@ fn child_main(sock: UnixStream) -> ! {
                         eprintln!("[memory:child] scan error: {e}");
                         (RESP_ERR, e.into_bytes())
                     }
-                }
-            }
-            REQ_READ_LOG_BUFFER => {
-                match find_warframe_pid() {
-                    Some(pid) => match handle_read_log_buffer(pid) {
-                        Ok(data) => (RESP_OK, data),
-                        Err(e) => {
-                            eprintln!("[memory:child] ReadLogBuffer error: {e}");
-                            (RESP_ERR, e.into_bytes())
-                        }
-                    },
-                    None => (RESP_ERR, b"Warframe not running".to_vec()),
                 }
             }
             other => {

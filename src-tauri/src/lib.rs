@@ -387,78 +387,6 @@ fn show_test_riven_overlay(app: AppHandle) {
     });
 }
 
-// ── EE.log memory buffer poller (memory feature, Linux only) ─────────────────
-
-#[cfg(all(feature = "memory", target_os = "linux"))]
-fn start_log_buffer_poller() {
-    std::thread::spawn(|| {
-        // Last write-head address seen; 0 = not yet read.
-        let mut last_write_head: u64 = 0;
-        // Partial line carried across poll boundaries.
-        let mut line_buf = String::new();
-
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-
-            let Some(data) = account_memory::read_log_buffer() else { continue };
-            if data.len() < 8 + account_memory::LOG_BUF_SIZE {
-                continue;
-            }
-
-            let write_head = u64::from_le_bytes(data[..8].try_into().unwrap());
-            let buf = &data[8..];
-
-            // write_head is an absolute address; convert to byte offset in buf.
-            let new_end = if write_head >= account_memory::LOG_START_ADDR
-                && write_head <= account_memory::LOG_END_ADDR
-            {
-                (write_head - account_memory::LOG_START_ADDR) as usize
-            } else {
-                // write_head out of expected range — skip until it settles.
-                continue;
-            };
-
-            let old_end = if last_write_head >= account_memory::LOG_START_ADDR
-                && last_write_head <= account_memory::LOG_END_ADDR
-            {
-                (last_write_head - account_memory::LOG_START_ADDR) as usize
-            } else {
-                0 // first valid read: print everything up to write_head
-            };
-
-            if new_end == old_end {
-                continue; // no new data
-            }
-
-            last_write_head = write_head;
-
-            let new_bytes = if new_end > old_end {
-                &buf[old_end..new_end]
-            } else {
-                // write_head wrapped or reset — restart from 0
-                line_buf.clear();
-                &buf[..new_end]
-            };
-
-            let text = String::from_utf8_lossy(new_bytes);
-            let combined = format!("{line_buf}{text}");
-            line_buf.clear();
-
-            let mut lines = combined.split('\n').peekable();
-            while let Some(line) = lines.next() {
-                if lines.peek().is_none() {
-                    // last chunk may be incomplete — hold for next poll
-                    if !line.is_empty() {
-                        line_buf.push_str(line);
-                    }
-                } else if !line.is_empty() {
-                    eprintln!("[ee_log_mem] {}", line.trim_end_matches('\r'));
-                }
-            }
-        }
-    });
-}
-
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -467,9 +395,6 @@ pub fn run() {
     // all before Tauri / D-Bus / GTK initialise. See docs/memory.md.
     #[cfg(all(feature = "memory", target_os = "linux"))]
     account_memory::init();
-
-    #[cfg(all(feature = "memory", target_os = "linux"))]
-    start_log_buffer_poller();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
