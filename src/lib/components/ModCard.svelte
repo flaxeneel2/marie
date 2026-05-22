@@ -49,9 +49,11 @@
     return url;
   }
 
-  let thumbUrl = $state<string | null>(
-    _urlCache.get(`${item.itemType}:${item.rank ?? 0}:t`) ?? null
-  );
+  let thumbUrl = $state<string | null>(null);
+
+  $effect.pre(() => {
+    thumbUrl = _urlCache.get(`${item.itemType}:${item.rank ?? 0}:t`) ?? null;
+  });
 
   $effect(() => {
     if (!wrapEl || thumbUrl) return;
@@ -62,7 +64,7 @@
         renderCard(false).then(u => { if (live) thumbUrl = u; }).catch(() => {});
     };
 
-    const ric = (window as Window & { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
+    const ric = (window as any).requestIdleCallback;
 
     // prioritise visible cards: IO fires early, but still defers to idle so the
     // initial paint isn't blocked by 36 concurrent canvas renders
@@ -77,8 +79,12 @@
     return () => {
       live = false;
       io.disconnect();
-      const cic = (window as Window & { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback;
-      ric ? cic?.(id as number) : clearTimeout(id as ReturnType<typeof setTimeout>);
+      const cic = (window as any).cancelIdleCallback;
+      if (ric) {
+        cic?.(id as number);
+      } else {
+        clearTimeout(id as ReturnType<typeof setTimeout>);
+      }
     };
   });
 
