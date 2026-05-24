@@ -446,6 +446,9 @@ pub fn run() {
                     Err(e) => eprintln!("[marie] riven cache failed: {e}"),
                 }
             });
+            #[cfg(all(feature = "memory", target_os = "linux"))]
+            ee_log::start_memory_watcher(app.handle().clone());
+            #[cfg(not(all(feature = "memory", target_os = "linux")))]
             ee_log::start_watcher(app.handle().clone());
             Ok(())
         })

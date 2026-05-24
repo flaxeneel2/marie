@@ -21,6 +21,7 @@ use std::sync::Mutex;
 // Response: [u8 status] [u16le body_len] [body bytes]
 
 const REQ_SCAN_ACCOUNT: u8 = 0x01;
+const REQ_READ_LOG_BUFFER: u8 = 0x02;
 
 const RESP_OK: u8 = 0x00;
 const RESP_ERR: u8 = 0x01;
@@ -395,6 +396,10 @@ fn child_main(sock: UnixStream) -> ! {
         }
 
         let (status, body): (u8, Vec<u8>) = match tag {
+            REQ_READ_LOG_BUFFER => match handle_read_log_buffer() {
+                Ok(buf) => (RESP_OK, buf),
+                Err(e) => (RESP_ERR, e.into_bytes()),
+            },
             REQ_SCAN_ACCOUNT => {
                 eprintln!("[memory:child] handling ScanAccount");
                 match handle_scan_account() {
@@ -433,6 +438,34 @@ fn child_main(sock: UnixStream) -> ! {
 
     unsafe { libc::close(fd) };
     std::process::exit(0);
+}
+
+/// Read the EE.log ring buffer from Warframe's memory via the privileged child.
+/// Returns None if the child is unavailable or Warframe is not running.
+pub fn read_log_buffer() -> Option<Vec<u8>> {
+    let mut guard = CHILD_SOCK.lock().unwrap();
+    let sock = guard.as_mut()?;
+    write_request(sock, REQ_READ_LOG_BUFFER, &[]).ok()?;
+    match read_response(sock) {
+        Ok(Ok(body)) => Some(body),
+        _ => None,
+    }
+}
+
+fn handle_read_log_buffer() -> Result<Vec<u8>, String> {
+    let pid = find_warframe_pid().ok_or_else(|| "Warframe not running".to_string())?;
+    if !pid_is_warframe(pid) {
+        return Err("PID stale".into());
+    }
+    let mem_file = fs::File::open(format!("/proc/{pid}/mem"))
+        .map_err(|e| format!("open /proc/{pid}/mem: {e}"))?;
+    const BUFFER_VA: u64 = 0x589000;
+    const BUFFER_SIZE: usize = 0x4000; // 16 KiB — covers full ~8 KiB ring buffer
+    let mut buf = vec![0u8; BUFFER_SIZE];
+    mem_file
+        .read_at(&mut buf, BUFFER_VA)
+        .map_err(|e| format!("pread 0x{BUFFER_VA:x}: {e}"))?;
+    Ok(buf)
 }
 
 fn handle_scan_account() -> Result<AccountInfo, String> {

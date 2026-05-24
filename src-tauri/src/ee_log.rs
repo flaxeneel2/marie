@@ -51,10 +51,10 @@ const RIVEN_COST_CONFIRM: &str = "Are you sure you want to cycle";
 const RIVEN_SEND_RESULT: &str = "Dialog::SendResult(4)";
 
 // Delay after Diorama setup before capturing initial stats.
-const RIVEN_OPEN_DELAY: std::time::Duration = std::time::Duration::from_millis(800);
+const RIVEN_OPEN_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
 
-// Delay after SendResult(4) before OCR. Assumes new stats are on screen within 1s.
-const RIVEN_REROLL_DELAY: std::time::Duration = std::time::Duration::from_millis(1000);
+// Delay after SendResult(4) before OCR. Assumes new stats are on screen within 4s.
+const RIVEN_REROLL_DELAY: std::time::Duration = std::time::Duration::from_millis(4000);
 
 // HUD returning to ship — riven screen exited.
 const RIVEN_CLOSE: &str = "DiegeticArtifactCards.lua: DBG: HudVis";
@@ -105,6 +105,116 @@ fn detect_squad_size(recent: &std::collections::VecDeque<String>) -> Option<u32>
         }
     }
     None
+}
+
+/// Memory-based EE.log watcher: polls the in-process ring buffer at VA 0x589000
+/// every 150 ms via the privileged child, avoiding the ~10 s on-disk flush delay.
+/// Same events as `start_watcher`; used when the `memory` feature is enabled.
+#[cfg(all(feature = "memory", target_os = "linux"))]
+pub fn start_memory_watcher(app: AppHandle) {
+    std::thread::spawn(move || {
+        let poll = std::time::Duration::from_millis(150);
+
+        let mut riven_active = false;
+        let mut pending_roll = false;
+        let mut trigger_was_in_buf = false;
+        let mut cost_confirm_was_in_buf = false;
+        let mut send_result_was_in_buf = false;
+
+        loop {
+            std::thread::sleep(poll);
+
+            let buf = match crate::account_memory::read_log_buffer() {
+                Some(b) => b,
+                None => {
+                    riven_active = false;
+                    pending_roll = false;
+                    trigger_was_in_buf = false;
+                    cost_confirm_was_in_buf = false;
+                    send_result_was_in_buf = false;
+                    continue;
+                }
+            };
+
+            let text = String::from_utf8_lossy(&buf);
+
+            // ── Riven screen open / close ────────────────────────────────────────
+            let riven_now = text.contains(RIVEN_OPEN);
+            if riven_now && !riven_active {
+                riven_active = true;
+                pending_roll = false;
+                cost_confirm_was_in_buf = false;
+                send_result_was_in_buf = false;
+                eprintln!("[riven:mem] screen opened — OCR in {RIVEN_OPEN_DELAY:?}");
+                let app2 = app.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(RIVEN_OPEN_DELAY);
+                    app2.emit("riven-screen-open", ()).ok();
+                });
+            }
+            if !riven_now && riven_active {
+                riven_active = false;
+                pending_roll = false;
+                cost_confirm_was_in_buf = false;
+                send_result_was_in_buf = false;
+                eprintln!("[riven:mem] screen closed");
+            }
+
+            // ── Riven rolling ────────────────────────────────────────────────────
+            if riven_active {
+                let confirm_now = text.contains(RIVEN_COST_CONFIRM);
+                if confirm_now && !cost_confirm_was_in_buf {
+                    eprintln!("[riven:mem] cost confirm seen — awaiting SendResult");
+                    pending_roll = true;
+                }
+                cost_confirm_was_in_buf = confirm_now;
+
+                let result_now = text.contains(RIVEN_SEND_RESULT);
+                if result_now && !send_result_was_in_buf && pending_roll {
+                    pending_roll = false;
+                    eprintln!("[riven:mem] roll confirmed — OCR in {RIVEN_REROLL_DELAY:?}");
+                    app.emit("riven-rolling", ()).ok();
+                    let app2 = app.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(RIVEN_REROLL_DELAY);
+                        app2.emit("riven-reroll", ()).ok();
+                    });
+                }
+                send_result_was_in_buf = result_now;
+            }
+
+            // ── Relic trigger ────────────────────────────────────────────────────
+            let trigger_now = text.contains(TRIGGER);
+            if trigger_now && !trigger_was_in_buf {
+                let player_count = squad_size_from_buf(&buf);
+                eprintln!(
+                    "[marie:mem] relic reward screen ({player_count}p), waiting {TRIGGER_DELAY:?}"
+                );
+                let app2 = app.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(TRIGGER_DELAY);
+                    app2.emit("relic-trigger", player_count).ok();
+                });
+            }
+            trigger_was_in_buf = trigger_now;
+        }
+    });
+}
+
+/// Extract squad size from the raw ring-buffer bytes by searching for "reward choices: N".
+#[cfg(all(feature = "memory", target_os = "linux"))]
+fn squad_size_from_buf(buf: &[u8]) -> u32 {
+    let needle = b"reward choices: ";
+    let mut last = 4u32;
+    for i in 0..buf.len().saturating_sub(needle.len() + 1) {
+        if buf[i..i + needle.len()].eq_ignore_ascii_case(needle) {
+            let d = buf[i + needle.len()];
+            if (b'1'..=b'4').contains(&d) {
+                last = (d - b'0') as u32;
+            }
+        }
+    }
+    last
 }
 
 pub fn start_watcher(app: AppHandle) {

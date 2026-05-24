@@ -59,8 +59,9 @@ status: 0x00 = OK, 0x01 = Err
 | Tag | Name | Payload | Response body |
 |-----|------|---------|---------------|
 | `0x01` | `ScanAccount` | (empty) | JSON `AccountInfo` |
+| `0x02` | `ReadLogBuffer` | (empty) | 16 KiB raw bytes from VA `0x589000` |
 
-Future tags (planned): `ReadLogBuffer`, `EBpfProbe`, etc.
+Future tags (planned): `EBpfProbe`, etc.
 
 ## IPC hardening
 
@@ -195,10 +196,22 @@ const info = await invoke<{
 
 Returns `null` in the standard build or when the scan was skipped.
 
+## EE.log ring buffer
+
+`ReadLogBuffer` (tag `0x02`) reads 16 KiB at VA `0x589000` — the wine/Proton
+pre-reserved region that holds Warframe's in-process EE.log ring buffer. This
+region is stable across restarts (wine bypasses ASLR for its auxiliary area).
+
+The parent polls this every 150 ms via `account_memory::read_log_buffer()`.
+`ee_log::start_memory_watcher` processes the raw bytes with edge detection
+(not line-by-line), emitting the same Tauri events as the disk watcher but with
+sub-200 ms latency instead of up to 10 s flush delay.
+
+See [RE docs](../../games/warframe/dump/RE/docs/riven-screen-detection.md) for
+full reverse-engineering notes, address stability validation, and buffer layout.
+
 ## Future work
 
 - Re-scan on EE.log `Logged in` events (handles mid-session relog).
-- `ReadLogBuffer` request tag — read EE.log page cache via child without
-  re-elevating the parent.
 - Use `account_id` + `nonce` to call Warframe account API for mastery data.
 - Mastery overview UI module.
